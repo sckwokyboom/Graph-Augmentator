@@ -207,9 +207,11 @@ Algorithm: BFS upward along `Calls` edges. Two nuances:
 **Chain ranking** (best first):
 
 1. Shorter chains first.
-2. Tie-broken by smaller test method size (number of unique methods the test
-   touches before reaching the target). Focused tests are more useful to the
-   agent.
+2. Tie-broken by fewer virtual steps (more direct dispatch, easier for the
+   agent to follow). V2 may refine this to "smaller test method size" (the
+   number of unique methods the test touches before reaching target), which
+   gives a better proxy for "focused test" but requires a secondary BFS at
+   extraction time.
 
 Default `maxChains = 16` (CLI-tunable).
 

@@ -24,13 +24,13 @@ public final class ReverseCallChainExtractor {
 
         while (!frontier.isEmpty()) {
             Path p = frontier.poll();
-            Node node = g.byId(p.methodId());
-            if (node instanceof Node.Method m && m.isTest() && !p.stepsTowardTarget().isEmpty()) {
+            if (!(g.byId(p.methodId()) instanceof Node.Method current)) continue;
+            if (current.isTest() && !p.stepsTowardTarget().isEmpty()) {
                 // Reverse: build chain test → ... → target (caller-to-callee order)
                 var reversed = new ArrayList<>(p.stepsTowardTarget());
                 Collections.reverse(reversed);
                 int v = (int) reversed.stream().filter(CallStep::viaVirtual).count();
-                chains.add(new Chain(m, reversed, v));
+                chains.add(new Chain(current, reversed, v));
                 if (chains.size() >= maxChains) break;
                 continue;
             }
@@ -57,7 +57,7 @@ public final class ReverseCallChainExtractor {
                     if (!visitedEdges.add(edgeKey)) continue;
                     if (!(g.byId(in.fromId()) instanceof Node.Method caller)) continue;
                     var step = new CallStep(caller.id(), caller.fqn(),
-                            p.methodId(), ((Node.Method) g.byId(p.methodId())).fqn(),
+                            current.id(), current.fqn(),
                             true, null, List.of());
                     var nextSteps = new ArrayList<>(p.stepsTowardTarget());
                     nextSteps.add(step);
@@ -69,10 +69,18 @@ public final class ReverseCallChainExtractor {
         return new ChainResult(rank(chains), truncated);
     }
 
+    /**
+     * V1 simplification: tiebreaker is fewer virtual steps (= more direct
+     * dispatch, easier for the agent to follow). The design spec §5.3
+     * originally specified "smaller test method size (number of unique
+     * methods the test touches)"; that requires a secondary BFS per chain
+     * and is deferred to V2.
+     */
     private List<Chain> rank(List<Chain> chains) {
-        chains.sort(Comparator
+        var sorted = new ArrayList<>(chains);
+        sorted.sort(Comparator
                 .comparingInt(Chain::depth)
-                .thenComparingInt((Chain c) -> c.virtualSteps()));
-        return chains.subList(0, Math.min(maxChains, chains.size()));
+                .thenComparingInt(Chain::virtualSteps));
+        return sorted.subList(0, Math.min(maxChains, sorted.size()));
     }
 }
