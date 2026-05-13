@@ -23,6 +23,13 @@ public final class CpgImporter {
                            .add(e.path("inV").asText());
             }
         }
+        Map<String, String> astParent = new HashMap<>();
+        for (var entry : astChildren.entrySet()) {
+            String parentId = entry.getKey();
+            for (String childId : entry.getValue()) {
+                astParent.put(childId, parentId);
+            }
+        }
 
         // Methods (with @Test detection via AST annotation children)
         for (JsonNode v : root.path("vertices")) {
@@ -79,7 +86,7 @@ public final class CpgImporter {
         for (JsonNode v : root.path("vertices")) {
             if (!"CALL".equals(v.path("label").asText())) continue;
             JsonNode p = v.path("properties");
-            String inMethod = parentMethodOf(v.path("id").asText(), astChildren, rawById);
+            String inMethod = parentMethodOf(v.path("id").asText(), astParent, rawById);
             String calleeFull = p.path("METHOD_FULL_NAME").asText();
             String calleeFqn = calleeFull.contains(":") ? calleeFull.substring(0, calleeFull.indexOf(':')) : calleeFull;
             String csId = "cs:" + v.path("id").asText();
@@ -97,7 +104,7 @@ public final class CpgImporter {
         for (JsonNode v : root.path("vertices")) {
             if (!"LITERAL".equals(v.path("label").asText())) continue;
             JsonNode p = v.path("properties");
-            String inMethod = parentMethodOf(v.path("id").asText(), astChildren, rawById);
+            String inMethod = parentMethodOf(v.path("id").asText(), astParent, rawById);
             String id = "lit:" + v.path("id").asText();
             var lit = new Node.Literal(id, inMethod == null ? "" : "m:" + inMethod,
                     Node.LiteralKind.OTHER, p.path("CODE").asText(),
@@ -135,15 +142,16 @@ public final class CpgImporter {
         return g;
     }
 
-    private String parentMethodOf(String childId, Map<String, List<String>> astChildren,
+    private String parentMethodOf(String childId, Map<String, String> astParent,
                                   Map<String, JsonNode> rawById) {
-        for (var e : astChildren.entrySet()) {
-            if (e.getValue().contains(childId)) {
-                JsonNode parent = rawById.get(e.getKey());
-                if (parent != null && "METHOD".equals(parent.path("label").asText())) {
-                    return parent.path("properties").path("FULL_NAME").asText();
-                }
+        String parentId = astParent.get(childId);
+        while (parentId != null) {
+            JsonNode parent = rawById.get(parentId);
+            if (parent == null) return null;
+            if ("METHOD".equals(parent.path("label").asText())) {
+                return parent.path("properties").path("FULL_NAME").asText();
             }
+            parentId = astParent.get(parentId);
         }
         return null;
     }

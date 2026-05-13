@@ -113,13 +113,18 @@ public final class BudgetPlanner {
     private void charge(Artifact a) {
         budget.tryAdd(estimateProtectedMinimum(a));
         for (int i = 1; i < a.chains().size(); i++) {
-            for (CallStep s : a.chains().get(i).steps()) {
+            Chain c = a.chains().get(i);
+            for (CallStep s : c.steps()) {
                 if (s.snippet() != null) budget.tryAdd(s.snippet());
+                for (ArgOrigin o : s.argOrigins()) budget.tryAdd(o.toString());
             }
         }
         for (var s : a.localContext().siblings()) budget.tryAdd(s.signature() + s.body());
         for (var u : a.localContext().usedTypes()) {
             budget.tryAdd(u.type().fqn() + String.join("", u.publicMethodSignatures()));
+            if (u.type().enumConstants() != null) {
+                budget.tryAdd(String.join("", u.type().enumConstants()));
+            }
         }
         for (var p : a.localContext().productionCallSites()) budget.tryAdd(p.snippet());
     }

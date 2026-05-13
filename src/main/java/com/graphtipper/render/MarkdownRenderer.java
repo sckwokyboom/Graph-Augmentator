@@ -55,14 +55,20 @@ public final class MarkdownRenderer {
                     for (ArgOrigin o : s.argOrigins()) {
                         sb.append("- `arg").append(o.argIndex()).append("` = ");
                         switch (o.kind()) {
-                            case LITERAL -> sb.append("`").append(o.value()).append("` (literal");
+                            case LITERAL -> {
+                                sb.append("`").append(o.value()).append("` (literal");
+                                if (o.file() != null) sb.append(", ").append(o.file()).append(":").append(o.line());
+                                sb.append(")");
+                            }
                             case PARAMETER -> sb.append("parameter `").append(o.paramName()).append("`");
                             case FIELD -> sb.append("field `").append(o.fieldFqn()).append("`");
-                            case FACTORY_CALL -> sb.append("factory `").append(o.factoryFqn()).append("(...)`");
+                            case FACTORY_CALL -> {
+                                sb.append("factory `").append(o.factoryFqn()).append("(...)`");
+                                if (o.file() != null) sb.append(" — ").append(o.file()).append(":").append(o.line());
+                            }
                             case UNKNOWN -> sb.append("unknown");
                         }
-                        if (o.file() != null) sb.append(", ").append(o.file()).append(":").append(o.line());
-                        sb.append(")\n");
+                        sb.append("\n");
                     }
                 }
                 sb.append("\n");

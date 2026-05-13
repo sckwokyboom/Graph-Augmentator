@@ -49,4 +49,31 @@ class MarkdownRendererTest {
         var md = new MarkdownRenderer().render(artifact, new TokenBudget(20_000), "h", "proj");
         assertThat(md).contains("No tests transitively reach this target");
     }
+
+    @Test
+    void rendersNonLiteralArgOriginsCleanly() {
+        var g = Gb.graph()
+            .method("p.T.t1").testFlag(true).file("T.java").done()
+            .method("p.C.target").file("C.java").done()
+            .build();
+        var target = (Node.Method) g.byFqn("p.C.target").get(0);
+        var test = (Node.Method) g.byFqn("p.T.t1").get(0);
+        var origins = List.of(
+                new ArgOrigin(0, ArgOrigin.Kind.PARAMETER, null, null, "x:int", null, null, -1),
+                new ArgOrigin(1, ArgOrigin.Kind.FIELD, null, null, null, "p.C.y", null, -1),
+                new ArgOrigin(2, ArgOrigin.Kind.FACTORY_CALL, null, "p.F.make", null, null, "F.java", 7),
+                new ArgOrigin(3, ArgOrigin.Kind.UNKNOWN, null, null, null, null, null, -1));
+        var step = new CallStep(test.id(), "p.T.t1", target.id(), "p.C.target",
+                false, "  target();", origins);
+        var artifact = new Artifact(target, "", List.of(new Chain(test, List.of(step), 0)), false,
+                new LocalContext(List.of(), List.of(), List.of()));
+        var md = new MarkdownRenderer().render(artifact, new TokenBudget(20_000), "h", "p");
+        // Each non-literal line should not end with ")"
+        assertThat(md).contains("parameter `x:int`\n");
+        assertThat(md).contains("field `p.C.y`\n");
+        assertThat(md).contains("factory `p.F.make(...)` — F.java:7\n");
+        assertThat(md).contains("unknown\n");
+        assertThat(md).doesNotContain("unknown)");
+        assertThat(md).doesNotContain("`x:int`)");
+    }
 }

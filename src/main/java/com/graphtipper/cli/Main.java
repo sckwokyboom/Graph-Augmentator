@@ -25,6 +25,7 @@ public final class Main implements Callable<Integer> {
     @Option(names = "--treat-test-dirs-as-tests") boolean treatTestDirsAsTests;
     @Option(names = "--no-cache") boolean noCache;
     @Option(names = "--joern-home") Path joernHome;
+    // V1: parsed but not yet rendered. DOT output is deferred to V2; see plan §12.
     @Option(names = "--debug-dot") boolean debugDot;
 
     public static void main(String[] args) {
@@ -35,6 +36,7 @@ public final class Main implements Callable<Integer> {
     public Integer call() {
         try {
             Files.createDirectories(out);
+            String projectSrcHash = SourceHash.ofJavaSources(project);
             Path cacheRoot = out.resolve(".cache");
             var runner = new JoernRunner(new ProcessJoernInvoker(joernHome), cacheRoot);
             Path exportDir = runner.buildAndExport(project, noCache);
@@ -75,9 +77,9 @@ public final class Main implements Callable<Integer> {
             }
 
             String md = new MarkdownRenderer().render(artifact, budget,
-                    SourceHash.ofJavaSources(project), project.getFileName().toString());
+                    projectSrcHash, project.getFileName().toString());
             String json = new JsonRenderer().render(artifact, budget);
-            String hash = digest(target + "@" + SourceHash.ofJavaSources(project));
+            String hash = digest(target + "@" + projectSrcHash);
             writeAtomic(out.resolve(hash + ".md"), md);
             writeAtomic(out.resolve(hash + ".json"), json);
             System.out.println(out.resolve(hash + ".md"));

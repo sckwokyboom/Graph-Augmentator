@@ -28,6 +28,24 @@ public final class ProjectGraph {
         }
     }
 
+    public void replaceNode(Node n) {
+        Node old = nodes.get(n.id());
+        if (old == null) { addNode(n); return; }
+        nodes.put(n.id(), n);
+        if (old instanceof Node.Method oldM) {
+            List<Node> bf = byFqn.get(oldM.fqn());
+            if (bf != null) { bf.remove(oldM); }
+            List<Node> bfl = byFile.get(oldM.file());
+            if (bfl != null) { bfl.remove(oldM); }
+            testMethods.remove(oldM);
+        }
+        if (n instanceof Node.Method newM) {
+            byFqn.computeIfAbsent(newM.fqn(), k -> new ArrayList<>()).add(newM);
+            if (newM.file() != null) byFile.computeIfAbsent(newM.file(), k -> new ArrayList<>()).add(newM);
+            if (newM.isTest()) testMethods.add(newM);
+        }
+    }
+
     public void addEdge(Edge e) {
         outgoingByFrom.computeIfAbsent(e.fromId(), k -> new ArrayList<>()).add(e);
         incomingByTo.computeIfAbsent(e.toId(), k -> new ArrayList<>()).add(e);

@@ -47,4 +47,18 @@ class ProjectGraphTest {
         g.addNode(a);
         assertThat(g.byFile("F.java")).contains(a);
     }
+
+    @Test
+    void replaceNodeUpdatesTestMethodsIndex() {
+        var g = new ProjectGraph();
+        var prod = m("p.A.foo");
+        g.addNode(prod);
+        assertThat(g.testMethods()).isEmpty();
+        var asTest = new Node.Method(prod.id(), prod.fqn(), prod.signature(),
+                prod.paramTypes(), prod.returnType(), prod.file(),
+                prod.lineStart(), prod.lineEnd(), prod.javadoc(),
+                true, prod.isAbstract(), prod.modifiers());
+        g.replaceNode(asTest);
+        assertThat(g.testMethods()).containsExactly(asTest);
+    }
 }

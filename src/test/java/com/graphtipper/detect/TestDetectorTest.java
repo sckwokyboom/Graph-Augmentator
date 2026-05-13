@@ -27,5 +27,7 @@ class TestDetectorTest {
             "src/main/java/p/A.java", 1, 2, null, false, false, List.of("public")));
         var marked = new TestDetector(true).markTests(g);
         assertThat(marked).extracting(Node.Method::fqn).containsExactly("p.T.t1");
+        // After markTests, the graph's testMethods index must reflect the promotion.
+        assertThat(g.testMethods()).extracting(Node.Method::fqn).containsExactly("p.T.t1");
     }
 }

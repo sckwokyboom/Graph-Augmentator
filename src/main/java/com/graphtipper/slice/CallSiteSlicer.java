@@ -14,7 +14,9 @@ public final class CallSiteSlicer {
         Node.CallSite cs = findCallSite(g, step);
         if (cs == null) return step.withEnrichment("(call site not located)", List.of());
 
-        Node.Method caller = (Node.Method) g.byId(step.callerMethodId());
+        if (!(g.byId(step.callerMethodId()) instanceof Node.Method caller)) {
+            return step.withEnrichment("(caller not found)", List.of());
+        }
         String snippet;
         try {
             snippet = reader.readAround(caller.file(), cs.line(), 3, 2);

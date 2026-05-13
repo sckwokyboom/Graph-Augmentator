@@ -573,3 +573,36 @@ foreclose them:
 - **Snapshot tests for renderers.** Approval tests are brittle if Joern's
   output drifts. Mitigated by running renderer tests on hand-built
   `ProjectGraph` instances, not on real Joern output.
+
+## 14. V1 Known Limitations (accepted, deferred to V2)
+
+These items are functional gaps the V1 implementation accepts. They are listed
+explicitly so consumers and future contributors aren't surprised.
+
+1. **`ArgOrigin.Kind.PARAMETER` is unreachable in production.** The V1
+   `CpgImporter` does not import `PARAM` nodes or `ARGUMENT` edges, so
+   argument flow that crosses a parameter binding resolves to `UNKNOWN`
+   instead of `PARAMETER`. V2: import `PARAM` nodes and replace
+   `REACHING_DEF`-as-Ddg with `ARGUMENT` edges that carry argument index.
+2. **`Node.Method.signature` is in Joern format** (`returnType(paramTypes)`,
+   e.g. `int(int,int)`), not Java syntax (`add(int, int): int`). The Markdown
+   `## Target / Signature:` block and `AmbiguousTargetException` messages
+   carry this raw form. V2: normalize at import time.
+3. **`Node.Method.paramTypes` is always `List.of()` after import.** The
+   importer does not populate it. `MethodLocator` therefore falls back to
+   name+class matching when the spec specifies parameter types.
+4. **`@TestFactory` and JUnit 4's `org.junit.Test` annotations are not
+   detected.** Only JUnit 5 `Test`, `ParameterizedTest`, `RepeatedTest` are
+   matched by name in the importer.
+5. **`JsonRenderer` `chains[].steps[].callSite` carries best-effort file/line
+   only.** Until V2 plumbs precise call-site source location through
+   `CallStep`, the JSON falls back to the first non-null `argOrigins[].file`
+   for `file` and `line`, and always sets `col=-1`.
+6. **`BudgetPlanner` eviction stage 2 (`used-types-bodies`) is currently a
+   no-op at the data level.** `LocalContext.UsedType` does not store bodies;
+   only signatures and enum constants. The label is recorded for parity with
+   the spec; in V2 the stage becomes meaningful when bodies are stored.
+7. **`--debug-dot` is parsed but produces no DOT output.** DOT rendering is
+   deferred to V2.
+8. **Joern-not-found maps to exit code 1, not the spec's exit code 4.** The
+   Joern subprocess failure surface error message identifies the cause.

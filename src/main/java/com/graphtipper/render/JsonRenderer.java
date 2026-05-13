@@ -41,8 +41,14 @@ public final class JsonRenderer {
                 sn.put("callerFqn", s.callerFqn());
                 sn.put("calleeFqn", s.calleeFqn());
                 ObjectNode csn = sn.putObject("callSite");
-                csn.put("file", c.test().file());
-                csn.put("line", -1);
+                // V1: precise call-site file/line/col not yet plumbed through CallStep.
+                // Use the first non-null arg-origin file as a best-effort; otherwise null.
+                String csFile = null; int csLine = -1;
+                for (ArgOrigin o : s.argOrigins()) {
+                    if (o.file() != null) { csFile = o.file(); csLine = o.line(); break; }
+                }
+                csn.put("file", csFile);
+                csn.put("line", csLine);
                 csn.put("col", -1);
                 sn.put("snippet", s.snippet());
                 ArrayNode origins = sn.putArray("argOrigins");

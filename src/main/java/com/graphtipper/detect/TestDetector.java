@@ -14,14 +14,20 @@ public final class TestDetector {
 
     public List<Node.Method> markTests(ProjectGraph g) {
         var out = new ArrayList<Node.Method>();
+        // Collect promotions first to avoid mutation during iteration.
+        var promotions = new ArrayList<Node.Method>();
         for (Node n : g.allNodes()) {
             if (!(n instanceof Node.Method m)) continue;
             if (m.isTest()) { out.add(m); continue; }
             if (treatTestDirsAsTests && m.file() != null
                     && (m.file().replace('\\', '/').contains("/src/test/java/")
                         || m.file().replace('\\', '/').startsWith("src/test/java/"))) {
-                out.add(promote(m));
+                promotions.add(promote(m));
             }
+        }
+        for (Node.Method p : promotions) {
+            g.replaceNode(p);
+            out.add(p);
         }
         return out;
     }
