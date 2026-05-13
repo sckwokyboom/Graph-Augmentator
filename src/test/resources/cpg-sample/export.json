@@ -1,0 +1,29 @@
+{
+  "vertices": [
+    {"id": "1", "label": "METHOD",
+     "properties": {"FULL_NAME": "p.C.target:void(int)", "NAME": "target",
+                    "SIGNATURE": "void(int)", "FILENAME": "src/main/java/p/C.java",
+                    "LINE_NUMBER": 5, "LINE_NUMBER_END": 7}},
+    {"id": "2", "label": "METHOD",
+     "properties": {"FULL_NAME": "p.T.t1:void()", "NAME": "t1",
+                    "SIGNATURE": "void()", "FILENAME": "src/test/java/p/T.java",
+                    "LINE_NUMBER": 10, "LINE_NUMBER_END": 12}},
+    {"id": "3", "label": "ANNOTATION",
+     "properties": {"NAME": "Test", "FULL_NAME": "org.junit.jupiter.api.Test"}},
+    {"id": "4", "label": "TYPE_DECL",
+     "properties": {"FULL_NAME": "p.C", "NAME": "C",
+                    "FILENAME": "src/main/java/p/C.java"}},
+    {"id": "5", "label": "CALL",
+     "properties": {"METHOD_FULL_NAME": "p.C.target:void(int)",
+                    "LINE_NUMBER": 11, "COLUMN_NUMBER": 5, "CODE": "C.target(0)"}},
+    {"id": "6", "label": "LITERAL",
+     "properties": {"CODE": "0", "TYPE_FULL_NAME": "int", "LINE_NUMBER": 11}}
+  ],
+  "edges": [
+    {"id": "e1", "label": "AST", "outV": "2", "inV": "3"},
+    {"id": "e2", "label": "AST", "outV": "2", "inV": "5"},
+    {"id": "e3", "label": "CALL", "outV": "5", "inV": "1"},
+    {"id": "e4", "label": "ARGUMENT", "outV": "5", "inV": "6"},
+    {"id": "e5", "label": "REACHING_DEF", "outV": "6", "inV": "5"}
+  ]
+}
