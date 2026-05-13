@@ -23,7 +23,6 @@ public final class ReverseCallChainExtractor {
         boolean truncated = false;
 
         while (!frontier.isEmpty()) {
-            if (frontier.size() > frontierGuard) { truncated = true; break; }
             Path p = frontier.poll();
             Node node = g.byId(p.methodId());
             if (node instanceof Node.Method m && m.isTest() && !p.stepsTowardTarget().isEmpty()) {
@@ -35,6 +34,7 @@ public final class ReverseCallChainExtractor {
                 if (chains.size() >= maxChains) break;
                 continue;
             }
+            if (frontier.size() > frontierGuard) { truncated = true; break; }
             for (Edge.Calls in : g.incomingCalls(p.methodId())) {
                 String edgeKey = in.fromId() + "->" + in.toId();
                 if (!visitedEdges.add(edgeKey)) continue;
@@ -46,6 +46,23 @@ public final class ReverseCallChainExtractor {
                 var nextSteps = new ArrayList<>(p.stepsTowardTarget());
                 nextSteps.add(step);
                 frontier.add(new Path(caller.id(), nextSteps));
+            }
+            // Virtual: target overrides a parent method; callers of the parent
+            // should be considered callers of us. Edge.Overrides goes child → parent.
+            for (Edge over : g.outgoing(p.methodId())) {
+                if (!(over instanceof Edge.Overrides ov)) continue;
+                String parentId = ov.toId();
+                for (Edge.Calls in : g.incomingCalls(parentId)) {
+                    String edgeKey = in.fromId() + "->virtual->" + p.methodId();
+                    if (!visitedEdges.add(edgeKey)) continue;
+                    if (!(g.byId(in.fromId()) instanceof Node.Method caller)) continue;
+                    var step = new CallStep(caller.id(), caller.fqn(),
+                            p.methodId(), ((Node.Method) g.byId(p.methodId())).fqn(),
+                            true, null, List.of());
+                    var nextSteps = new ArrayList<>(p.stepsTowardTarget());
+                    nextSteps.add(step);
+                    frontier.add(new Path(caller.id(), nextSteps));
+                }
             }
         }
 
