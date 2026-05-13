@@ -2,6 +2,7 @@ package com.graphtipper.cpg;
 
 import java.io.IOException;
 import java.nio.file.*;
+import java.util.stream.Stream;
 
 public final class ProcessJoernInvoker implements JoernInvoker {
     private final Path joernHome;  // null → use PATH
@@ -22,7 +23,10 @@ public final class ProcessJoernInvoker implements JoernInvoker {
 
     @Override
     public void runJoernExport(Path cpgFile, Path outDir) throws Exception {
-        Files.createDirectories(outDir);
+        // joern-export refuses to write into an existing directory; it creates outDir itself.
+        // Ensure the parent exists, and clear any stale outDir from a prior failed run.
+        if (outDir.getParent() != null) Files.createDirectories(outDir.getParent());
+        deleteIfExists(outDir);
         String cmd = resolveBinary("joern-export");
         ProcessBuilder pb = new ProcessBuilder(cmd,
                 cpgFile.toAbsolutePath().toString(),
@@ -32,6 +36,14 @@ public final class ProcessJoernInvoker implements JoernInvoker {
                 .redirectErrorStream(true).inheritIO();
         int code = pb.start().waitFor();
         if (code != 0) throw new IOException("joern-export exit " + code);
+    }
+
+    private static void deleteIfExists(Path p) throws IOException {
+        if (!Files.exists(p)) return;
+        try (Stream<Path> s = Files.walk(p)) {
+            s.sorted((a, b) -> b.getNameCount() - a.getNameCount())
+             .forEach(x -> { try { Files.delete(x); } catch (IOException e) { throw new RuntimeException(e); } });
+        }
     }
 
     private String resolveBinary(String name) {
