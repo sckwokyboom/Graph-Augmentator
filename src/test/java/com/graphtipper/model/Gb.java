@@ -32,6 +32,34 @@ public final class Gb {
 
     public ProjectGraph build() { return g; }
 
+    public Gb callSite(String inMethodFqn, String calleeFqn, int line, int col, String snippet) {
+        var m = (Node.Method) g.byFqn(inMethodFqn).get(0);
+        var cs = new Node.CallSite("cs:" + m.id() + "@" + line + ":" + col,
+                m.id(), calleeFqn, 0, line, col, snippet);
+        g.addNode(cs);
+        // attach call edge from callsite to target if target exists
+        var ts = g.byFqn(calleeFqn);
+        if (!ts.isEmpty()) {
+            g.addEdge(new Edge.Calls(cs.id(), ts.get(0).id(), false));
+        }
+        return this;
+    }
+
+    public Gb literal(String inMethodFqn, String value, int line) {
+        var m = (Node.Method) g.byFqn(inMethodFqn).get(0);
+        var lit = new Node.Literal("lit:" + m.id() + "@" + line + "#" + value,
+                m.id(), Node.LiteralKind.INT, value, line);
+        g.addNode(lit);
+        return this;
+    }
+
+    public Gb ddg(String fromNodeId, String toNodeId) {
+        g.addEdge(new Edge.Ddg(fromNodeId, toNodeId));
+        return this;
+    }
+
+    public ProjectGraph buildRaw() { return g; }
+
     public static final class MethodB {
         private final Gb owner;
         private final String fqn;
