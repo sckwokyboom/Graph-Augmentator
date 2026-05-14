@@ -19,7 +19,9 @@ public final class ReverseCallChainExtractor {
         Deque<Path> frontier = new ArrayDeque<>();
         Set<String> visitedEdges = new HashSet<>();
         frontier.add(new Path(target.id(), List.of()));
-        int frontierGuard = maxChains * 8;
+        // When maxChains is effectively unbounded (Integer.MAX_VALUE under --no-budget),
+        // keep the frontier guard unbounded too instead of overflowing on `* 8`.
+        int frontierGuard = (maxChains > Integer.MAX_VALUE / 8) ? Integer.MAX_VALUE : maxChains * 8;
         boolean truncated = false;
 
         while (!frontier.isEmpty()) {
