@@ -720,7 +720,8 @@ Append to `AstSnippetExtractorTest.java`:
     @Test
     void classifiesLocalVariableArgument() {
         Path file = Path.of("src/test/resources/snippet-fixtures/SimpleVarChain.java");
-        var s = extractor.sliceAt(file, 6, 9, "process", 12);
+        // `process(name, n);` is on line 7 of the fixture (line 1 = package).
+        var s = extractor.sliceAt(file, 7, 9, "process", 12);
         assertThat(s.argOrigins()).hasSize(2);
         var a0 = s.argOrigins().get(0);
         assertThat(a0.kind()).isEqualTo(ArgOrigin.Kind.LOCAL_VAR);
@@ -952,18 +953,22 @@ Append to `AstSnippetExtractorTest.java`:
     @Test
     void backwardSliceCapturesDefinition() {
         Path file = Path.of("src/test/resources/snippet-fixtures/SimpleVarChain.java");
-        var s = extractor.sliceAt(file, 6, 9, "process", 12);
-        // origin 0 is `name`, defined on line 5; origin 1 is `n`, defined on line 4
-        assertThat(s.argOrigins().get(0).definedAtLine()).isEqualTo(5);
+        // SimpleVarChain layout (line 1 = `package fixtures;`):
+        //   5: int n = 42;
+        //   6: String name = "test-" + n;
+        //   7: process(name, n);          <- the call site
+        var s = extractor.sliceAt(file, 7, 9, "process", 12);
+        assertThat(s.argOrigins().get(0).definedAtLine()).isEqualTo(6);
         assertThat(s.argOrigins().get(0).definedAtSnippet()).contains("String name");
-        assertThat(s.argOrigins().get(1).definedAtLine()).isEqualTo(4);
+        assertThat(s.argOrigins().get(1).definedAtLine()).isEqualTo(5);
         assertThat(s.argOrigins().get(1).definedAtSnippet()).contains("int n = 42");
     }
 
     @Test
     void truncationFlagSetWhenLimitExceeded() {
         Path file = Path.of("src/test/resources/snippet-fixtures/TruncationLimit.java");
-        var s = extractor.sliceAt(file, 9, 9, "use", 2);
+        // TruncationLimit fixture has `use(e);` on line 10 (5 def lines + package + class + method header).
+        var s = extractor.sliceAt(file, 10, 9, "use", 2);
         assertThat(s.truncated()).isTrue();
     }
 ```
@@ -1260,7 +1265,8 @@ Append to `AstSnippetExtractorTest.java`:
     @Test
     void renderedBodyStartsWithSignatureAndEndsWithBrace() {
         Path file = Path.of("src/test/resources/snippet-fixtures/SimpleVarChain.java");
-        var s = extractor.sliceAt(file, 6, 9, "process", 12);
+        // `process(name, n);` is on line 7 in SimpleVarChain.
+        var s = extractor.sliceAt(file, 7, 9, "process", 12);
         assertThat(s.renderedBody().get(0)).contains("runChain");
         assertThat(s.renderedBody().get(s.renderedBody().size() - 1).trim()).isEqualTo("}");
     }
