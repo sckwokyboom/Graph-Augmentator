@@ -5,6 +5,10 @@ import com.github.javaparser.ParseResult;
 import com.github.javaparser.ParserConfiguration;
 import com.github.javaparser.ast.CompilationUnit;
 import com.github.javaparser.ast.Node;
+import com.github.javaparser.ast.body.CallableDeclaration;
+import com.github.javaparser.ast.body.ConstructorDeclaration;
+import com.github.javaparser.ast.body.InitializerDeclaration;
+import com.github.javaparser.ast.body.MethodDeclaration;
 import com.github.javaparser.ast.expr.MethodCallExpr;
 import com.github.javaparser.ast.expr.ObjectCreationExpr;
 
@@ -52,10 +56,19 @@ public final class AstSnippetExtractor {
         if (callNode == null) {
             return fallback(entry.rawLines, callLine, callColumn, List.of("call_not_found"));
         }
-        // Slicing logic in Tasks 5-8 will replace this stub.
-        List<String> body = new ArrayList<>();
-        body.add("(call located at line " + callLine + ")");
-        return new SnippetAt("(stub)", callLine, callColumn, body, List.of(), false, List.of());
+        CallableDeclaration<?> enclosing = findEnclosingMethod(callNode);
+        if (enclosing == null) {
+            List<String> warns = new ArrayList<>();
+            warns.add(inInitializerBlock(callNode) ? "no_enclosing_method:initializer"
+                                                   : "no_enclosing_method");
+            return fallback(entry.rawLines, callLine, callColumn, warns);
+        }
+        String signature = signatureOf(enclosing);
+
+        // Slicing logic in Tasks 6-8 will fill renderedBody and argOrigins.
+        return new SnippetAt(signature, callLine, callColumn,
+                List.of(signature + " { /* not yet sliced */ }"),
+                List.of(), false, List.of());
     }
 
     private SnippetAt fallback(List<String> rawLines, int callLine, int callColumn,
@@ -83,6 +96,36 @@ public final class AstSnippetExtractor {
             return new CacheEntry(null, List.of("(io error: " + io.getMessage() + ")"),
                     false);
         }
+    }
+
+    /**
+     * Walk parents to find the closest enclosing method/constructor declaration.
+     * Returns null if the call lives outside any callable (e.g. a field initializer
+     * or static block); the caller handles that via {@link #inInitializerBlock}.
+     */
+    private CallableDeclaration<?> findEnclosingMethod(Node callNode) {
+        Node n = callNode;
+        while (n != null) {
+            if (n instanceof MethodDeclaration md) return md;
+            if (n instanceof ConstructorDeclaration cd) return cd;
+            n = n.getParentNode().orElse(null);
+        }
+        return null;
+    }
+
+    /** Format the method signature as a single readable line (modifiers + return + name + params). */
+    private String signatureOf(CallableDeclaration<?> decl) {
+        return decl.getDeclarationAsString(true, false, true);
+    }
+
+    /** True if the call lives inside an instance/static initializer block. */
+    private boolean inInitializerBlock(Node callNode) {
+        Node n = callNode;
+        while (n != null) {
+            if (n instanceof InitializerDeclaration) return true;
+            n = n.getParentNode().orElse(null);
+        }
+        return false;
     }
 
     private Node locateCallNode(CompilationUnit cu, int line, int column, String calleeSimpleName) {
