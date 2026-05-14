@@ -4,6 +4,9 @@ import com.github.javaparser.JavaParser;
 import com.github.javaparser.ParseResult;
 import com.github.javaparser.ParserConfiguration;
 import com.github.javaparser.ast.CompilationUnit;
+import com.github.javaparser.ast.Node;
+import com.github.javaparser.ast.expr.MethodCallExpr;
+import com.github.javaparser.ast.expr.ObjectCreationExpr;
 
 import java.io.IOException;
 import java.nio.file.Files;
@@ -44,8 +47,15 @@ public final class AstSnippetExtractor {
         if (!entry.parseOk) {
             return fallback(entry.rawLines, callLine, callColumn, List.of("parse_failed"));
         }
-        // Slicing logic in Tasks 4-8 will replace this stub.
-        return fallback(entry.rawLines, callLine, callColumn, List.of("not_implemented_yet"));
+        CompilationUnit cu = entry.cu;
+        Node callNode = locateCallNode(cu, callLine, callColumn, calleeSimpleName);
+        if (callNode == null) {
+            return fallback(entry.rawLines, callLine, callColumn, List.of("call_not_found"));
+        }
+        // Slicing logic in Tasks 5-8 will replace this stub.
+        List<String> body = new ArrayList<>();
+        body.add("(call located at line " + callLine + ")");
+        return new SnippetAt("(stub)", callLine, callColumn, body, List.of(), false, List.of());
     }
 
     private SnippetAt fallback(List<String> rawLines, int callLine, int callColumn,
@@ -73,5 +83,29 @@ public final class AstSnippetExtractor {
             return new CacheEntry(null, List.of("(io error: " + io.getMessage() + ")"),
                     false);
         }
+    }
+
+    private Node locateCallNode(CompilationUnit cu, int line, int column, String calleeSimpleName) {
+        Node best = null;
+        int bestColDelta = Integer.MAX_VALUE;
+        for (MethodCallExpr m : cu.findAll(MethodCallExpr.class)) {
+            if (!m.getName().asString().equals(calleeSimpleName)) continue;
+            if (!m.getBegin().isPresent()) continue;
+            int begLine = m.getBegin().get().line;
+            int begCol = m.getBegin().get().column;
+            if (begLine != line) continue;
+            int delta = Math.abs(begCol - column);
+            if (delta < bestColDelta) { best = m; bestColDelta = delta; }
+        }
+        for (ObjectCreationExpr o : cu.findAll(ObjectCreationExpr.class)) {
+            if (!o.getType().getName().asString().equals(calleeSimpleName)) continue;
+            if (!o.getBegin().isPresent()) continue;
+            int begLine = o.getBegin().get().line;
+            int begCol = o.getBegin().get().column;
+            if (begLine != line) continue;
+            int delta = Math.abs(begCol - column);
+            if (delta < bestColDelta) { best = o; bestColDelta = delta; }
+        }
+        return best;
     }
 }
