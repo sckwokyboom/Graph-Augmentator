@@ -55,26 +55,50 @@ public final class MarkdownRenderer {
                     sb.append("**Arg origins at `").append(s.calleeFqn()).append("` call:**\n");
                     for (ArgOrigin o : s.argOrigins()) {
                         sb.append("- `arg").append(o.argIndex()).append("` = ");
-                        switch (o.kind()) {
-                            case LITERAL -> {
-                                sb.append("`").append(o.value()).append("` (literal");
-                                if (o.file() != null) sb.append(", ").append(o.file()).append(":").append(o.line());
-                                sb.append(")");
-                            }
-                            case PARAMETER -> sb.append("parameter `").append(o.paramName()).append("`");
-                            case FIELD -> sb.append("field `").append(o.fieldFqn()).append("`");
-                            case FACTORY_CALL -> {
-                                sb.append("factory `").append(o.factoryFqn()).append("(...)`");
-                                if (o.file() != null) sb.append(" — ").append(o.file()).append(":").append(o.line());
-                            }
-                            case UNKNOWN -> sb.append("unknown");
-                        }
+                        sb.append(renderArgOrigin(o));
                         sb.append("\n");
                     }
                 }
                 sb.append("\n");
             }
         }
+    }
+
+    /**
+     * Renders a single ArgOrigin into its markdown fragment. Uses a switch expression so
+     * the compiler enforces exhaustiveness over {@link ArgOrigin.Kind} — adding a new Kind
+     * without updating this method becomes a compile-time error rather than a silently
+     * empty rendering.
+     */
+    private static String renderArgOrigin(ArgOrigin o) {
+        return switch (o.kind()) {
+            case LITERAL -> {
+                var b = new StringBuilder();
+                b.append("`").append(o.value()).append("` (literal");
+                if (o.file() != null) b.append(", ").append(o.file()).append(":").append(o.line());
+                b.append(")");
+                yield b.toString();
+            }
+            case PARAMETER -> "parameter `" + o.paramName() + "`";
+            case FIELD -> "field `" + o.fieldFqn() + "`";
+            case FACTORY_CALL -> {
+                var b = new StringBuilder();
+                b.append("factory `").append(o.factoryFqn()).append("(...)`");
+                if (o.file() != null) b.append(" — ").append(o.file()).append(":").append(o.line());
+                yield b.toString();
+            }
+            case LOCAL_VAR -> o.definedAtLine() > 0
+                    ? "local `" + o.paramName() + "` (defined at line " + o.definedAtLine() + ")"
+                    : "local `" + o.paramName() + "`";
+            case LOOP_VAR -> o.definedAtLine() > 0
+                    ? "loop var `" + o.paramName() + "` (defined at line " + o.definedAtLine() + ")"
+                    : "loop var `" + o.paramName() + "`";
+            case FIELD_ACCESS -> "field access `" + o.exprText() + "`";
+            case METHOD_CALL -> "call `" + o.exprText() + "`";
+            case INDEXED_ACCESS -> "indexed access `" + o.exprText() + "`";
+            case CONSTRUCTOR -> "new `" + o.exprText() + "`";
+            case UNKNOWN -> "unknown";
+        };
     }
 
     private void renderLocalContext(StringBuilder sb, Artifact a) {

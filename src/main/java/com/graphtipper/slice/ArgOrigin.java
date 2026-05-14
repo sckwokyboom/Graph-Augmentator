@@ -1,5 +1,25 @@
 package com.graphtipper.slice;
 
+// Per-Kind field usage:
+//   LITERAL          - value, file, line
+//   PARAMETER        - paramName
+//   FIELD            - fieldFqn
+//   FACTORY_CALL     - factoryFqn, file, line
+//   LOCAL_VAR        - paramName, file, line, definedAtLine, definedAtSnippet
+//   LOOP_VAR         - paramName, file, line, definedAtLine, definedAtSnippet
+//   FIELD_ACCESS     - exprText
+//   METHOD_CALL      - exprText
+//   INDEXED_ACCESS   - exprText
+//   CONSTRUCTOR      - exprText
+//   UNKNOWN          - (no fields populated)
+// All other fields are null/-1 for the given Kind.
+//
+// For LOCAL_VAR / LOOP_VAR, the file-position field `line` is set equal to
+// `definedAtLine` by construction: a variable's "site" in this context IS the
+// definition site. Legacy JSON consumers reading `line` get the definition
+// line; new consumers reading `definedAtLine` get the same value. If you ever
+// need to distinguish "use site" from "definition site" for these Kinds,
+// introduce a separate field rather than reusing `line` for both.
 public record ArgOrigin(
         int argIndex,
         Kind kind,

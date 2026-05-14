@@ -76,4 +76,23 @@ class MarkdownRendererTest {
         assertThat(md).doesNotContain("unknown)");
         assertThat(md).doesNotContain("`x:int`)");
     }
+
+    @Test
+    void rendersLocalVarArgOriginWithDefinitionLine() {
+        var g = Gb.graph()
+            .method("p.T.t1").testFlag(true).file("T.java").done()
+            .method("p.C.target").file("C.java").done()
+            .build();
+        var target = (Node.Method) g.byFqn("p.C.target").get(0);
+        var test = (Node.Method) g.byFqn("p.T.t1").get(0);
+        var origins = List.of(
+                ArgOrigin.localVar(0, "v", "f.java", 17, "int v = 1;"));
+        var step = new CallStep(test.id(), "p.T.t1", target.id(), "p.C.target",
+                false, "  target(v);", origins);
+        var artifact = new Artifact(target, "", List.of(new Chain(test, List.of(step), 0)), false,
+                new LocalContext(List.of(), List.of(), List.of()));
+        var md = new MarkdownRenderer().render(artifact, new TokenBudget(20_000), "h", "p");
+        assertThat(md).contains("local `v`");
+        assertThat(md).contains("line 17");
+    }
 }
