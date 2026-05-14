@@ -62,6 +62,11 @@ public final class JsonRenderer {
                     if (o.fieldFqn() != null) on.put("fieldFqn", o.fieldFqn());
                     if (o.file() != null) on.put("file", o.file());
                     on.put("line", o.line());
+                    if (o.exprText() != null) on.put("exprText", o.exprText());
+                    if (o.definedAtLine() > 0) {
+                        on.put("definedAtLine", o.definedAtLine());
+                        if (o.definedAtSnippet() != null) on.put("definedAtSnippet", o.definedAtSnippet());
+                    }
                 }
                 sn.put("viaVirtual", s.viaVirtual());
             }

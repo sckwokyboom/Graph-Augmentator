@@ -59,10 +59,10 @@ class MarkdownRendererTest {
         var target = (Node.Method) g.byFqn("p.C.target").get(0);
         var test = (Node.Method) g.byFqn("p.T.t1").get(0);
         var origins = List.of(
-                new ArgOrigin(0, ArgOrigin.Kind.PARAMETER, null, null, "x:int", null, null, -1),
-                new ArgOrigin(1, ArgOrigin.Kind.FIELD, null, null, null, "p.C.y", null, -1),
-                new ArgOrigin(2, ArgOrigin.Kind.FACTORY_CALL, null, "p.F.make", null, null, "F.java", 7),
-                new ArgOrigin(3, ArgOrigin.Kind.UNKNOWN, null, null, null, null, null, -1));
+                ArgOrigin.parameter(0, "x:int"),
+                ArgOrigin.field(1, "p.C.y"),
+                ArgOrigin.factoryCall(2, "p.F.make", "F.java", 7),
+                ArgOrigin.unknown(3));
         var step = new CallStep(test.id(), "p.T.t1", target.id(), "p.C.target",
                 false, "  target();", origins);
         var artifact = new Artifact(target, "", List.of(new Chain(test, List.of(step), 0)), false,

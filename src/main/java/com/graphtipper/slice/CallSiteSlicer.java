@@ -47,25 +47,23 @@ public final class CallSiteSlicer {
 
     private ArgOrigin backslice(ProjectGraph g, String nodeId, int argIdx, int depth) {
         if (depth > MAX_BACK_SLICE_DEPTH) {
-            return new ArgOrigin(argIdx, ArgOrigin.Kind.UNKNOWN, null, null, null, null, null, -1);
+            return ArgOrigin.unknown(argIdx);
         }
         Node n = g.byId(nodeId);
         return switch (n) {
-            case Node.Literal lit -> new ArgOrigin(argIdx, ArgOrigin.Kind.LITERAL,
-                    lit.value(), null, null, null, methodFile(g, lit.inMethodId()), lit.line());
-            case Node.Parameter p -> new ArgOrigin(argIdx, ArgOrigin.Kind.PARAMETER,
-                    null, null, p.name() + ":" + p.type(), null, null, -1);
-            case Node.Field f -> new ArgOrigin(argIdx, ArgOrigin.Kind.FIELD,
-                    null, null, null, f.ownerTypeFqn() + "." + f.name(), null, -1);
-            case Node.CallSite cs -> new ArgOrigin(argIdx, ArgOrigin.Kind.FACTORY_CALL,
-                    null, cs.calleeFqn(), null, null, methodFile(g, cs.inMethodId()), cs.line());
+            case Node.Literal lit -> ArgOrigin.literal(argIdx, lit.value(),
+                    methodFile(g, lit.inMethodId()), lit.line());
+            case Node.Parameter p -> ArgOrigin.parameter(argIdx, p.name() + ":" + p.type());
+            case Node.Field f -> ArgOrigin.field(argIdx, f.ownerTypeFqn() + "." + f.name());
+            case Node.CallSite cs -> ArgOrigin.factoryCall(argIdx, cs.calleeFqn(),
+                    methodFile(g, cs.inMethodId()), cs.line());
             case null, default -> {
                 // Hop one more step
                 List<Edge> ins = g.incoming(nodeId);
                 for (Edge e : ins) if (e instanceof Edge.Ddg) {
                     yield backslice(g, e.fromId(), argIdx, depth + 1);
                 }
-                yield new ArgOrigin(argIdx, ArgOrigin.Kind.UNKNOWN, null, null, null, null, null, -1);
+                yield ArgOrigin.unknown(argIdx);
             }
         };
     }
