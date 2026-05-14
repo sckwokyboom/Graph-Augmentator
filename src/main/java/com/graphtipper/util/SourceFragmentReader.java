@@ -37,4 +37,10 @@ public final class SourceFragmentReader {
     public String readAround(String relPath, int line, int before, int after) {
         return readLines(relPath, line - before, line + after);
     }
+
+    /** Resolve a CPG-relative path against the project root for downstream consumers
+     *  that need a filesystem Path (e.g. {@code AstSnippetExtractor.sliceAt}). */
+    public Path resolveProject(String relPath) {
+        return projectRoot.resolve(relPath);
+    }
 }

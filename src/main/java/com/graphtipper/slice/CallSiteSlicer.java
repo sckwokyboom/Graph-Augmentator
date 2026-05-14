@@ -2,36 +2,40 @@ package com.graphtipper.slice;
 
 import com.graphtipper.model.*;
 import com.graphtipper.util.SourceFragmentReader;
+
+import java.nio.file.Path;
 import java.util.*;
 
 public final class CallSiteSlicer {
-    private static final int MAX_BACK_SLICE_DEPTH = 6;
-    private final SourceFragmentReader reader;
+    /** Maximum statements pulled by the intra-method backward slice for one call site. */
+    private static final int MAX_SLICE_STMTS = 12;
 
-    public CallSiteSlicer(SourceFragmentReader reader) { this.reader = reader; }
+    private final SourceFragmentReader reader;
+    private final AstSnippetExtractor ast;
+
+    /** Default constructor used by production code: creates a fresh AstSnippetExtractor. */
+    public CallSiteSlicer(SourceFragmentReader reader) { this(reader, new AstSnippetExtractor()); }
+
+    /** Test constructor: allows injecting an AstSnippetExtractor (real or stubbed). */
+    public CallSiteSlicer(SourceFragmentReader reader, AstSnippetExtractor ast) {
+        this.reader = reader;
+        this.ast = ast;
+    }
 
     public CallStep enrich(ProjectGraph g, CallStep step) {
         Node.CallSite cs = findCallSite(g, step);
         if (cs == null) return step.withEnrichment("(call site not located)", List.of());
-
         if (!(g.byId(step.callerMethodId()) instanceof Node.Method caller)) {
             return step.withEnrichment("(caller not found)", List.of());
         }
-        String snippet;
-        try {
-            snippet = reader.readAround(caller.file(), cs.line(), 3, 2);
-        } catch (Exception e) {
-            snippet = "(unavailable: " + e.getMessage() + ")";
-        }
 
-        var origins = new ArrayList<ArgOrigin>();
-        int arg = 0;
-        for (Edge e : g.incoming(cs.id())) {
-            if (!(e instanceof Edge.Ddg)) continue;
-            var origin = backslice(g, e.fromId(), arg++, 0);
-            origins.add(origin);
-        }
-        return step.withEnrichment(snippet, origins);
+        Path file = reader.resolveProject(caller.file());
+        String calleeSimple = simpleName(step.calleeFqn());
+        AstSnippetExtractor.SnippetAt snip = ast.sliceAt(file, cs.line(), cs.col(),
+                calleeSimple, MAX_SLICE_STMTS);
+
+        String rendered = String.join("\n", snip.renderedBody());
+        return step.withEnrichment(rendered, snip.argOrigins());
     }
 
     private Node.CallSite findCallSite(ProjectGraph g, CallStep step) {
@@ -45,30 +49,12 @@ public final class CallSiteSlicer {
         return null;
     }
 
-    private ArgOrigin backslice(ProjectGraph g, String nodeId, int argIdx, int depth) {
-        if (depth > MAX_BACK_SLICE_DEPTH) {
-            return ArgOrigin.unknown(argIdx);
-        }
-        Node n = g.byId(nodeId);
-        return switch (n) {
-            case Node.Literal lit -> ArgOrigin.literal(argIdx, lit.value(),
-                    methodFile(g, lit.inMethodId()), lit.line());
-            case Node.Parameter p -> ArgOrigin.parameter(argIdx, p.name() + ":" + p.type());
-            case Node.Field f -> ArgOrigin.field(argIdx, f.ownerTypeFqn() + "." + f.name());
-            case Node.CallSite cs -> ArgOrigin.factoryCall(argIdx, cs.calleeFqn(),
-                    methodFile(g, cs.inMethodId()), cs.line());
-            case null, default -> {
-                // Hop one more step
-                List<Edge> ins = g.incoming(nodeId);
-                for (Edge e : ins) if (e instanceof Edge.Ddg) {
-                    yield backslice(g, e.fromId(), argIdx, depth + 1);
-                }
-                yield ArgOrigin.unknown(argIdx);
-            }
-        };
-    }
-
-    private String methodFile(ProjectGraph g, String methodId) {
-        return g.byId(methodId) instanceof Node.Method m ? m.file() : null;
+    /** Pull the trailing simple name out of a Joern-style FQN, dropping any signature
+     *  suffix after `:` and any owning class/package segments. */
+    private static String simpleName(String fqn) {
+        int colon = fqn.indexOf(':');
+        String base = colon < 0 ? fqn : fqn.substring(0, colon);
+        int dot = base.lastIndexOf('.');
+        return dot < 0 ? base : base.substring(dot + 1);
     }
 }

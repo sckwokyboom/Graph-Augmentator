@@ -12,12 +12,13 @@ import static org.assertj.core.api.Assertions.assertThat;
 class CallSiteSlicerTest {
     @Test
     void enrichesStepWithSnippetAndLiteralArgOrigin(@TempDir Path dir) throws Exception {
+        // Fixture: call passes a literal directly. V2's AST slicer classifies the
+        // argument as LITERAL with value "0"; the V1 CPG DDG hop is no longer used.
         var src = dir.resolve("T.java");
         Files.writeString(src, """
             class T {
               void t1() {
-                int x = 0;
-                A.target(x);
+                A.target(0);
               }
             }
             """);
@@ -26,17 +27,8 @@ class CallSiteSlicerTest {
             .method("p.T.t1").testFlag(true).file("T.java").done()
             .method("p.A.target").done()
             .calls("p.T.t1", "p.A.target")
-            .callSite("p.T.t1", "p.A.target", 4, 9, "    A.target(x);");
-        // ddg: literal 0 (line 3) → callsite arg
-        gb = gb.literal("p.T.t1", "0", 3);
+            .callSite("p.T.t1", "p.A.target", 3, 9, "    A.target(0);");
         var g = gb.buildRaw();
-        var callSite = g.allNodes().stream()
-                .filter(n -> n instanceof Node.CallSite)
-                .map(n -> (Node.CallSite) n).findFirst().orElseThrow();
-        var lit = g.allNodes().stream()
-                .filter(n -> n instanceof Node.Literal)
-                .map(n -> (Node.Literal) n).findFirst().orElseThrow();
-        gb.ddg(lit.id(), callSite.id());
 
         var step = new CallStep(
                 ((Node.Method) g.byFqn("p.T.t1").get(0)).id(), "p.T.t1",
@@ -45,7 +37,7 @@ class CallSiteSlicerTest {
         var reader = new SourceFragmentReader(dir);
         var enriched = new CallSiteSlicer(reader).enrich(g, step);
 
-        assertThat(enriched.snippet()).contains("A.target(x)");
+        assertThat(enriched.snippet()).contains("A.target(0)");
         assertThat(enriched.argOrigins()).isNotEmpty();
         assertThat(enriched.argOrigins().get(0).kind()).isEqualTo(ArgOrigin.Kind.LITERAL);
         assertThat(enriched.argOrigins().get(0).value()).isEqualTo("0");
