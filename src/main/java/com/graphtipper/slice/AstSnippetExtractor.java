@@ -10,7 +10,10 @@ import com.github.javaparser.ast.body.CallableDeclaration;
 import com.github.javaparser.ast.body.ConstructorDeclaration;
 import com.github.javaparser.ast.body.InitializerDeclaration;
 import com.github.javaparser.ast.body.MethodDeclaration;
+import com.github.javaparser.ast.body.Parameter;
+import com.github.javaparser.ast.body.VariableDeclarator;
 import com.github.javaparser.ast.expr.ArrayAccessExpr;
+import com.github.javaparser.ast.expr.AssignExpr;
 import com.github.javaparser.ast.expr.Expression;
 import com.github.javaparser.ast.expr.FieldAccessExpr;
 import com.github.javaparser.ast.expr.LiteralExpr;
@@ -18,6 +21,15 @@ import com.github.javaparser.ast.expr.MethodCallExpr;
 import com.github.javaparser.ast.expr.NameExpr;
 import com.github.javaparser.ast.expr.NullLiteralExpr;
 import com.github.javaparser.ast.expr.ObjectCreationExpr;
+import com.github.javaparser.ast.expr.VariableDeclarationExpr;
+import com.github.javaparser.ast.stmt.BlockStmt;
+import com.github.javaparser.ast.stmt.ExpressionStmt;
+import com.github.javaparser.ast.stmt.ForEachStmt;
+import com.github.javaparser.ast.stmt.ForStmt;
+import com.github.javaparser.ast.stmt.IfStmt;
+import com.github.javaparser.ast.stmt.Statement;
+import com.github.javaparser.ast.stmt.TryStmt;
+import com.github.javaparser.ast.stmt.WhileStmt;
 
 import java.io.IOException;
 import java.nio.file.Files;
@@ -74,13 +86,32 @@ public final class AstSnippetExtractor {
 
         Set<String> seeds = new LinkedHashSet<>();
         List<ArgOrigin> argOrigins = classifyArguments(callNode, seeds);
+        SliceResult sliced = backwardSlice(enclosing, callNode, argOrigins, seeds,
+                maxSliceStmts, entry.rawLines);
 
-        // Slice walk (Task 7) refines LOCAL_VAR provisional origins into PARAMETER/
-        // LOOP_VAR/FIELD with definition lines, and selects supporting statements
-        // for renderedBody (Task 8 polishes emission).
-        return new SnippetAt(signature, callLine, callColumn,
-                List.of(signature + " { /* not yet sliced */ }"),
-                argOrigins, false, List.of());
+        List<String> body = renderBody(signature, sliced.selected(), entry.rawLines);
+        return new SnippetAt(signature, callLine, callColumn, body,
+                sliced.refinedArgs(), sliced.truncated(), List.of());
+    }
+
+    private List<String> renderBody(String signature, LinkedHashSet<Statement> selected,
+                                     List<String> rawLines) {
+        List<String> body = new ArrayList<>();
+        body.add(signature + " {");
+        Statement prev = null;
+        List<Statement> ordered = new ArrayList<>(selected);
+        ordered.sort(Comparator.comparingInt(st -> st.getBegin().get().line));
+        for (Statement s : ordered) {
+            if (prev != null && s.getBegin().get().line > prev.getEnd().get().line + 1) {
+                body.add("    // ...");
+            }
+            String code = String.join("\n", rawLines.subList(
+                    s.getBegin().get().line - 1, s.getEnd().get().line));
+            body.add(code);
+            prev = s;
+        }
+        body.add("}");
+        return body;
     }
 
     private SnippetAt fallback(List<String> rawLines, int callLine, int callColumn,
@@ -138,6 +169,195 @@ public final class AstSnippetExtractor {
             n = n.getParentNode().orElse(null);
         }
         return false;
+    }
+
+    private record SliceResult(LinkedHashSet<Statement> selected,
+                                List<ArgOrigin> refinedArgs,
+                                boolean truncated) {}
+
+    /**
+     * Walk the enclosing method's body in reverse from the call statement, collecting
+     * statements that define values used by the call's arguments. Also refines provisional
+     * LOCAL_VAR origins into PARAMETER or LOOP_VAR when the source is found.
+     */
+    private SliceResult backwardSlice(CallableDeclaration<?> enclosing,
+                                       Node callNode,
+                                       List<ArgOrigin> argOrigins,
+                                       Set<String> initialSeeds,
+                                       int maxSliceStmts,
+                                       List<String> rawLines) {
+        Map<String, Parameter> paramByName = new HashMap<>();
+        for (Parameter p : enclosing.getParameters()) paramByName.put(p.getNameAsString(), p);
+
+        List<ArgOrigin> refined = new ArrayList<>(argOrigins);
+        Set<String> needed = new LinkedHashSet<>(initialSeeds);
+
+        for (int i = 0; i < refined.size(); i++) {
+            ArgOrigin o = refined.get(i);
+            if (o.kind() == ArgOrigin.Kind.LOCAL_VAR && paramByName.containsKey(o.paramName())) {
+                Parameter p = paramByName.get(o.paramName());
+                refined.set(i, ArgOrigin.parameter(i, p.getNameAsString() + ":" + p.getType()));
+                needed.remove(o.paramName());
+            }
+        }
+
+        Statement callStmt = enclosingStatement(callNode);
+        if (callStmt == null) return new SliceResult(new LinkedHashSet<>(), refined, false);
+
+        BlockStmt body = bodyOf(enclosing).orElse(null);
+        if (body == null) return new SliceResult(new LinkedHashSet<>(), refined, false);
+
+        List<Statement> ordered = flattenStatements(body);
+        int callIdx = ordered.indexOf(callStmt);
+        if (callIdx < 0) return new SliceResult(new LinkedHashSet<>(), refined, false);
+
+        LinkedHashSet<Statement> selected = new LinkedHashSet<>();
+        selected.add(callStmt);
+        boolean truncated = false;
+
+        for (int i = callIdx - 1; i >= 0 && !needed.isEmpty(); i--) {
+            if (selected.size() >= maxSliceStmts) { truncated = true; break; }
+            Statement s = ordered.get(i);
+            if (matchesAssignmentOf(s, needed)) {
+                selected.add(s);
+                String line = s.getBegin().isPresent() && rawLines.size() >= s.getBegin().get().line
+                        ? rawLines.get(s.getBegin().get().line - 1).trim() : "";
+                refineLocalVarOrigins(refined, s, line);
+                Set<String> newSeeds = identifiersInRhs(s);
+                needed.addAll(newSeeds);
+                needed.removeAll(definedBy(s));
+            }
+            if (matchesLoopHeader(s, needed)) {
+                selected.add(s);
+                String line = s.getBegin().isPresent() && rawLines.size() >= s.getBegin().get().line
+                        ? rawLines.get(s.getBegin().get().line - 1).trim() : "";
+                refineLoopVarOrigins(refined, s, line);
+                needed.removeAll(definedBy(s));
+            }
+        }
+        if (!needed.isEmpty() && selected.size() >= maxSliceStmts) truncated = true;
+
+        return new SliceResult(selected, refined, truncated);
+    }
+
+    private Statement enclosingStatement(Node callNode) {
+        Node n = callNode;
+        while (n != null && !(n instanceof Statement)) n = n.getParentNode().orElse(null);
+        return (Statement) n;
+    }
+
+    private List<Statement> flattenStatements(BlockStmt body) {
+        List<Statement> out = new ArrayList<>();
+        for (Statement s : body.getStatements()) collectStatements(s, out);
+        return out;
+    }
+
+    private void collectStatements(Statement s, List<Statement> out) {
+        out.add(s);
+        if (s instanceof BlockStmt b) for (Statement c : b.getStatements()) collectStatements(c, out);
+        else if (s instanceof IfStmt i) {
+            collectStatements(i.getThenStmt(), out);
+            i.getElseStmt().ifPresent(e -> collectStatements(e, out));
+        } else if (s instanceof WhileStmt w) collectStatements(w.getBody(), out);
+        else if (s instanceof ForStmt f) collectStatements(f.getBody(), out);
+        else if (s instanceof ForEachStmt fe) collectStatements(fe.getBody(), out);
+        else if (s instanceof TryStmt t) {
+            collectStatements(t.getTryBlock(), out);
+            t.getCatchClauses().forEach(c -> collectStatements(c.getBody(), out));
+            t.getFinallyBlock().ifPresent(b -> collectStatements(b, out));
+        }
+    }
+
+    private boolean matchesAssignmentOf(Statement s, Set<String> needed) {
+        if (s instanceof ExpressionStmt es) {
+            Expression e = es.getExpression();
+            if (e instanceof VariableDeclarationExpr vde) {
+                for (VariableDeclarator v : vde.getVariables()) {
+                    if (needed.contains(v.getNameAsString())) return true;
+                }
+            }
+            if (e instanceof AssignExpr ae && ae.getTarget() instanceof NameExpr ne) {
+                if (needed.contains(ne.getNameAsString())) return true;
+            }
+        }
+        return false;
+    }
+
+    private boolean matchesLoopHeader(Statement s, Set<String> needed) {
+        if (s instanceof ForStmt f) {
+            for (Expression e : f.getInitialization()) {
+                if (e instanceof VariableDeclarationExpr vde) {
+                    for (VariableDeclarator v : vde.getVariables()) {
+                        if (needed.contains(v.getNameAsString())) return true;
+                    }
+                }
+            }
+        }
+        if (s instanceof ForEachStmt fe
+                && needed.contains(fe.getVariable().getVariable(0).getNameAsString())) return true;
+        return false;
+    }
+
+    private Set<String> definedBy(Statement s) {
+        Set<String> out = new LinkedHashSet<>();
+        if (s instanceof ExpressionStmt es && es.getExpression() instanceof VariableDeclarationExpr vde) {
+            for (VariableDeclarator v : vde.getVariables()) out.add(v.getNameAsString());
+        }
+        if (s instanceof ExpressionStmt es && es.getExpression() instanceof AssignExpr ae
+                && ae.getTarget() instanceof NameExpr ne) out.add(ne.getNameAsString());
+        if (s instanceof ForStmt f) {
+            for (Expression e : f.getInitialization()) {
+                if (e instanceof VariableDeclarationExpr vde) {
+                    for (VariableDeclarator v : vde.getVariables()) out.add(v.getNameAsString());
+                }
+            }
+        }
+        if (s instanceof ForEachStmt fe) out.add(fe.getVariable().getVariable(0).getNameAsString());
+        return out;
+    }
+
+    private Set<String> identifiersInRhs(Statement s) {
+        Set<String> out = new LinkedHashSet<>();
+        if (s instanceof ExpressionStmt es) {
+            Expression e = es.getExpression();
+            if (e instanceof VariableDeclarationExpr vde) {
+                for (VariableDeclarator v : vde.getVariables()) {
+                    v.getInitializer().ifPresent(init -> addAllNames(init, out));
+                }
+            }
+            if (e instanceof AssignExpr ae) addAllNames(ae.getValue(), out);
+        }
+        return out;
+    }
+
+    private void refineLocalVarOrigins(List<ArgOrigin> refined, Statement defStmt, String snippetLine) {
+        Set<String> defined = definedBy(defStmt);
+        int defLine = defStmt.getBegin().get().line;
+        for (int i = 0; i < refined.size(); i++) {
+            ArgOrigin o = refined.get(i);
+            if (o.kind() == ArgOrigin.Kind.LOCAL_VAR && defined.contains(o.paramName())
+                    && o.definedAtLine() <= 0) {
+                refined.set(i, ArgOrigin.localVar(i, o.paramName(), null, defLine, snippetLine));
+            }
+        }
+    }
+
+    private void refineLoopVarOrigins(List<ArgOrigin> refined, Statement loopStmt, String snippetLine) {
+        Set<String> defined = definedBy(loopStmt);
+        int defLine = loopStmt.getBegin().get().line;
+        for (int i = 0; i < refined.size(); i++) {
+            ArgOrigin o = refined.get(i);
+            if (o.kind() == ArgOrigin.Kind.LOCAL_VAR && defined.contains(o.paramName())) {
+                refined.set(i, ArgOrigin.loopVar(i, o.paramName(), null, defLine, snippetLine));
+            }
+        }
+    }
+
+    /** CallableDeclaration supertype lacks a uniform getBody(); this adapter handles both. */
+    private static Optional<BlockStmt> bodyOf(CallableDeclaration<?> decl) {
+        if (decl instanceof MethodDeclaration md) return md.getBody();
+        if (decl instanceof ConstructorDeclaration cd) return Optional.of(cd.getBody());
+        return Optional.empty();
     }
 
     private List<Expression> argumentsOf(Node callNode) {

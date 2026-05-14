@@ -91,4 +91,46 @@ class AstSnippetExtractorTest {
         assertThat(a1.kind()).isEqualTo(ArgOrigin.Kind.LOCAL_VAR);
         assertThat(a1.paramName()).isEqualTo("n");
     }
+
+    @Test
+    void reclassifiesParameterArgument() {
+        Path file = Path.of("src/test/resources/snippet-fixtures/ParameterArg.java");
+        var s = extractor.sliceAt(file, 5, 9, "consume", 12);
+        assertThat(s.argOrigins()).hasSize(1);
+        assertThat(s.argOrigins().get(0).kind()).isEqualTo(ArgOrigin.Kind.PARAMETER);
+        assertThat(s.argOrigins().get(0).paramName()).contains("value");
+    }
+
+    @Test
+    void reclassifiesLoopVariable() {
+        Path file = Path.of("src/test/resources/snippet-fixtures/LoopVar.java");
+        var s = extractor.sliceAt(file, 7, 13, "visit", 12);
+        assertThat(s.argOrigins()).hasSize(1);
+        var a = s.argOrigins().get(0);
+        assertThat(a.kind()).isEqualTo(ArgOrigin.Kind.LOOP_VAR);
+        assertThat(a.paramName()).isEqualTo("col");
+        assertThat(a.definedAtLine()).isEqualTo(6);
+    }
+
+    @Test
+    void backwardSliceCapturesDefinition() {
+        Path file = Path.of("src/test/resources/snippet-fixtures/SimpleVarChain.java");
+        // SimpleVarChain layout (line 1 = package):
+        //   5: int n = 42;
+        //   6: String name = "test-" + n;
+        //   7: process(name, n);          <- call
+        var s = extractor.sliceAt(file, 7, 9, "process", 12);
+        assertThat(s.argOrigins().get(0).definedAtLine()).isEqualTo(6);
+        assertThat(s.argOrigins().get(0).definedAtSnippet()).contains("String name");
+        assertThat(s.argOrigins().get(1).definedAtLine()).isEqualTo(5);
+        assertThat(s.argOrigins().get(1).definedAtSnippet()).contains("int n = 42");
+    }
+
+    @Test
+    void truncationFlagSetWhenLimitExceeded() {
+        Path file = Path.of("src/test/resources/snippet-fixtures/TruncationLimit.java");
+        // `use(e);` is on line 10 (5 var declarations + package + class + method header).
+        var s = extractor.sliceAt(file, 10, 9, "use", 2);
+        assertThat(s.truncated()).isTrue();
+    }
 }
