@@ -51,8 +51,14 @@ public final class Main implements Callable<Integer> {
             TargetSpec spec = TargetSpec.parse(target);
             Node.Method targetMethod = new MethodLocator().locate(g, spec);
 
-            int effectiveMaxChains = noBudget ? Integer.MAX_VALUE : maxChains;
-            ChainResult chainResult = new ReverseCallChainExtractor(effectiveMaxChains).extract(g, targetMethod);
+            // V2: extractor always extracts every reachable chain. Capping happens at
+            // the rendering layer below (top-maxChains for budget.md; full set for full.md
+            // and graph.json).
+            if (noBudget) {
+                System.err.println("[graph-tipper] --no-budget is deprecated and is a no-op: "
+                        + "full.md and graph.json are always emitted in their full form.");
+            }
+            ChainResult chainResult = new ReverseCallChainExtractor().extract(g, targetMethod);
             var reader = new SourceFragmentReader(project);
             var slicer = new CallSiteSlicer(reader);
             var enriched = new java.util.ArrayList<Chain>();
@@ -72,28 +78,38 @@ public final class Main implements Callable<Integer> {
                 }
             }
 
-            var artifact = new Artifact(targetMethod, currentBody, enriched, chainResult.truncated(), lc);
-            var budget = new TokenBudget(noBudget ? Integer.MAX_VALUE : budgetTokens);
-            if (!noBudget) {
-                try {
-                    artifact = new BudgetPlanner(budget).plan(artifact);
-                } catch (BudgetPlanner.BudgetExceededException e) {
-                    System.err.println("budget exceeded on minimum: " + e.getMessage());
-                    return 3;
-                }
-            } else {
-                // --no-budget: still charge the budget meter for visibility in the
-                // rendered header, but skip eviction entirely so every chain stays.
-                new BudgetPlanner(budget).planNoEvict(artifact);
+            // Full artifact: every chain, unbounded budget. Used for full.md and graph.json.
+            var fullArtifact = new Artifact(targetMethod, currentBody, enriched, chainResult.truncated(), lc);
+
+            // Budget artifact: top-maxChains chains, planned for token budget. Used for
+            // budget.md and the legacy <hash>.json (which keeps its old contract).
+            var topChains = enriched.subList(0, Math.min(maxChains, enriched.size()));
+            var budgetArtifactInitial = new Artifact(targetMethod, currentBody, topChains,
+                    chainResult.truncated(), lc);
+            var budget = new TokenBudget(budgetTokens);
+            Artifact budgetArtifact;
+            try {
+                budgetArtifact = new BudgetPlanner(budget).plan(budgetArtifactInitial);
+            } catch (BudgetPlanner.BudgetExceededException e) {
+                System.err.println("budget exceeded on minimum: " + e.getMessage());
+                return 3;
             }
 
-            String md = new MarkdownRenderer().render(artifact, budget,
-                    projectSrcHash, project.getFileName().toString());
-            String json = new JsonRenderer().render(artifact, budget);
+            var unlimitedBudget = new TokenBudget(Integer.MAX_VALUE);
+            new BudgetPlanner(unlimitedBudget).planNoEvict(fullArtifact);
+
+            String projectName = project.getFileName().toString();
+            String budgetMd = new MarkdownRenderer().render(budgetArtifact, budget, projectSrcHash, projectName);
+            String fullMd = new MarkdownRenderer().render(fullArtifact, unlimitedBudget, projectSrcHash, projectName);
+            String graphJson = new GraphJsonRenderer().render(fullArtifact, projectSrcHash, projectName);
+            String legacyJson = new JsonRenderer().render(budgetArtifact, budget);
+
             String hash = digest(target + "@" + projectSrcHash);
-            writeAtomic(out.resolve(hash + ".md"), md);
-            writeAtomic(out.resolve(hash + ".json"), json);
-            System.out.println(out.resolve(hash + ".md"));
+            writeAtomic(out.resolve(hash + ".budget.md"), budgetMd);
+            writeAtomic(out.resolve(hash + ".full.md"), fullMd);
+            writeAtomic(out.resolve(hash + ".graph.json"), graphJson);
+            writeAtomic(out.resolve(hash + ".json"), legacyJson);
+            System.out.println(out.resolve(hash + ".budget.md"));
             return 0;
         } catch (MethodLocator.TargetNotFoundException | MethodLocator.AmbiguousTargetException e) {
             System.err.println(e.getMessage());
