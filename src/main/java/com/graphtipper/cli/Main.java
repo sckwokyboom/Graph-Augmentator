@@ -22,6 +22,10 @@ public final class Main implements Callable<Integer> {
     @Option(names = "--out", required = true) Path out;
     @Option(names = "--budget-tokens", defaultValue = "20000") int budgetTokens;
     @Option(names = "--max-chains", defaultValue = "16") int maxChains;
+    @Option(names = "--no-budget",
+            description = "Disable token budget and chain cap: emit every chain found and skip all eviction. "
+                    + "Output can grow large; use when you want every transitive caller.")
+    boolean noBudget;
     @Option(names = "--treat-test-dirs-as-tests") boolean treatTestDirsAsTests;
     @Option(names = "--no-cache") boolean noCache;
     @Option(names = "--joern-home") Path joernHome;
@@ -47,7 +51,8 @@ public final class Main implements Callable<Integer> {
             TargetSpec spec = TargetSpec.parse(target);
             Node.Method targetMethod = new MethodLocator().locate(g, spec);
 
-            ChainResult chainResult = new ReverseCallChainExtractor(maxChains).extract(g, targetMethod);
+            int effectiveMaxChains = noBudget ? Integer.MAX_VALUE : maxChains;
+            ChainResult chainResult = new ReverseCallChainExtractor(effectiveMaxChains).extract(g, targetMethod);
             var reader = new SourceFragmentReader(project);
             var slicer = new CallSiteSlicer(reader);
             var enriched = new java.util.ArrayList<Chain>();
@@ -68,12 +73,18 @@ public final class Main implements Callable<Integer> {
             }
 
             var artifact = new Artifact(targetMethod, currentBody, enriched, chainResult.truncated(), lc);
-            var budget = new TokenBudget(budgetTokens);
-            try {
-                artifact = new BudgetPlanner(budget).plan(artifact);
-            } catch (BudgetPlanner.BudgetExceededException e) {
-                System.err.println("budget exceeded on minimum: " + e.getMessage());
-                return 3;
+            var budget = new TokenBudget(noBudget ? Integer.MAX_VALUE : budgetTokens);
+            if (!noBudget) {
+                try {
+                    artifact = new BudgetPlanner(budget).plan(artifact);
+                } catch (BudgetPlanner.BudgetExceededException e) {
+                    System.err.println("budget exceeded on minimum: " + e.getMessage());
+                    return 3;
+                }
+            } else {
+                // --no-budget: still charge the budget meter for visibility in the
+                // rendered header, but skip eviction entirely so every chain stays.
+                new BudgetPlanner(budget).planNoEvict(artifact);
             }
 
             String md = new MarkdownRenderer().render(artifact, budget,

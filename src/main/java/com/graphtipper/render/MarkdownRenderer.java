@@ -11,7 +11,8 @@ public final class MarkdownRenderer {
         sb.append("# Graph-Tipper Augmentation\n\n");
         sb.append("> Generated for: ").append(projectName).append(" @ ").append(projectKey).append("\n");
         sb.append("> Target: ").append(a.target().fqn()).append("\n");
-        sb.append("> Budget: ").append(budget.used()).append(" / ").append(budget.max()).append(" tokens · Chains: ")
+        String maxLabel = budget.max() == Integer.MAX_VALUE ? "unlimited" : Integer.toString(budget.max());
+        sb.append("> Budget: ").append(budget.used()).append(" / ").append(maxLabel).append(" tokens · Chains: ")
           .append(a.chains().size()).append(" · Truncated: ").append(a.truncated()).append("\n\n");
 
         renderTarget(sb, a);

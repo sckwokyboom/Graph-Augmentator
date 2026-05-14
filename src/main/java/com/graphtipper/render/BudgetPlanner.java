@@ -14,6 +14,15 @@ public final class BudgetPlanner {
 
     public BudgetPlanner(TokenBudget budget) { this.budget = budget; }
 
+    /**
+     * Charge the meter for an artifact without evicting any content. Used by
+     * {@code --no-budget}: the rendered header still reports how many tokens the
+     * full artifact costs, but nothing is dropped.
+     */
+    public void planNoEvict(Artifact a) {
+        charge(a);
+    }
+
     public Artifact plan(Artifact a) {
         Artifact cur = a;
 
