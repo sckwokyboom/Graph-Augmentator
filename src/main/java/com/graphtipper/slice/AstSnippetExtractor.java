@@ -5,11 +5,18 @@ import com.github.javaparser.ParseResult;
 import com.github.javaparser.ParserConfiguration;
 import com.github.javaparser.ast.CompilationUnit;
 import com.github.javaparser.ast.Node;
+import com.github.javaparser.ast.NodeList;
 import com.github.javaparser.ast.body.CallableDeclaration;
 import com.github.javaparser.ast.body.ConstructorDeclaration;
 import com.github.javaparser.ast.body.InitializerDeclaration;
 import com.github.javaparser.ast.body.MethodDeclaration;
+import com.github.javaparser.ast.expr.ArrayAccessExpr;
+import com.github.javaparser.ast.expr.Expression;
+import com.github.javaparser.ast.expr.FieldAccessExpr;
+import com.github.javaparser.ast.expr.LiteralExpr;
 import com.github.javaparser.ast.expr.MethodCallExpr;
+import com.github.javaparser.ast.expr.NameExpr;
+import com.github.javaparser.ast.expr.NullLiteralExpr;
 import com.github.javaparser.ast.expr.ObjectCreationExpr;
 
 import java.io.IOException;
@@ -65,10 +72,15 @@ public final class AstSnippetExtractor {
         }
         String signature = signatureOf(enclosing);
 
-        // Slicing logic in Tasks 6-8 will fill renderedBody and argOrigins.
+        Set<String> seeds = new LinkedHashSet<>();
+        List<ArgOrigin> argOrigins = classifyArguments(callNode, seeds);
+
+        // Slice walk (Task 7) refines LOCAL_VAR provisional origins into PARAMETER/
+        // LOOP_VAR/FIELD with definition lines, and selects supporting statements
+        // for renderedBody (Task 8 polishes emission).
         return new SnippetAt(signature, callLine, callColumn,
                 List.of(signature + " { /* not yet sliced */ }"),
-                List.of(), false, List.of());
+                argOrigins, false, List.of());
     }
 
     private SnippetAt fallback(List<String> rawLines, int callLine, int callColumn,
@@ -126,6 +138,64 @@ public final class AstSnippetExtractor {
             n = n.getParentNode().orElse(null);
         }
         return false;
+    }
+
+    private List<Expression> argumentsOf(Node callNode) {
+        if (callNode instanceof MethodCallExpr m) return m.getArguments();
+        if (callNode instanceof ObjectCreationExpr o) return o.getArguments();
+        return new NodeList<>();
+    }
+
+    /**
+     * Classify each argument by AST shape, and collect seed identifiers that the
+     * backward slice (Task 7) will use to find definitions. NameExpr args start as
+     * LOCAL_VAR provisional; Task 7 reclassifies to PARAMETER / LOOP_VAR if the
+     * lookup finds the source in a parameter list or for-header.
+     */
+    private List<ArgOrigin> classifyArguments(Node callNode, Set<String> seedsOut) {
+        List<Expression> args = argumentsOf(callNode);
+        List<ArgOrigin> origins = new ArrayList<>(args.size());
+        for (int i = 0; i < args.size(); i++) origins.add(classifyOne(i, args.get(i), seedsOut));
+        return origins;
+    }
+
+    private ArgOrigin classifyOne(int idx, Expression arg, Set<String> seedsOut) {
+        if (arg instanceof NullLiteralExpr) return ArgOrigin.literal(idx, "null", null, -1);
+        if (arg instanceof LiteralExpr lit) return ArgOrigin.literal(idx, lit.toString(), null, -1);
+        if (arg instanceof NameExpr ne) {
+            seedsOut.add(ne.getNameAsString());
+            return ArgOrigin.localVar(idx, ne.getNameAsString(), null, -1, null);
+        }
+        if (arg instanceof FieldAccessExpr fa) {
+            addLeftmostName(fa, seedsOut);
+            return ArgOrigin.fieldAccess(idx, fa.toString());
+        }
+        if (arg instanceof ArrayAccessExpr aa) {
+            addAllNames(aa, seedsOut);
+            return ArgOrigin.indexedAccess(idx, aa.toString());
+        }
+        if (arg instanceof MethodCallExpr mc) {
+            addAllNames(mc, seedsOut);
+            return ArgOrigin.methodCall(idx, mc.toString());
+        }
+        if (arg instanceof ObjectCreationExpr oc) {
+            addAllNames(oc, seedsOut);
+            return ArgOrigin.constructor(idx, oc.toString());
+        }
+        // BinaryExpr, UnaryExpr, CastExpr, ConditionalExpr, etc.: harvest identifiers,
+        // record as METHOD_CALL kind with the literal expression text.
+        addAllNames(arg, seedsOut);
+        return ArgOrigin.methodCall(idx, arg.toString());
+    }
+
+    private void addLeftmostName(Node n, Set<String> seedsOut) {
+        Node cur = n;
+        while (cur instanceof FieldAccessExpr fa) cur = fa.getScope();
+        if (cur instanceof NameExpr ne) seedsOut.add(ne.getNameAsString());
+    }
+
+    private void addAllNames(Node n, Set<String> seedsOut) {
+        for (NameExpr ne : n.findAll(NameExpr.class)) seedsOut.add(ne.getNameAsString());
     }
 
     private Node locateCallNode(CompilationUnit cu, int line, int column, String calleeSimpleName) {

@@ -64,4 +64,31 @@ class AstSnippetExtractorTest {
         assertThat(s.enclosingMethodSignature()).contains("target");
         assertThat(s.enclosingMethodSignature()).contains("int x");
     }
+
+    @Test
+    void classifiesLiteralArguments() {
+        Path file = Path.of("src/test/resources/snippet-fixtures/LiteralOnly.java");
+        var s = extractor.sliceAt(file, 5, 9, "process", 12);
+        assertThat(s.argOrigins()).hasSize(3);
+        assertThat(s.argOrigins().get(0).kind()).isEqualTo(ArgOrigin.Kind.LITERAL);
+        assertThat(s.argOrigins().get(0).value()).isEqualTo("0");
+        assertThat(s.argOrigins().get(1).kind()).isEqualTo(ArgOrigin.Kind.LITERAL);
+        assertThat(s.argOrigins().get(1).value()).isEqualTo("\"x\"");
+        assertThat(s.argOrigins().get(2).kind()).isEqualTo(ArgOrigin.Kind.LITERAL);
+        assertThat(s.argOrigins().get(2).value()).isEqualTo("null");
+    }
+
+    @Test
+    void classifiesLocalVariableArgument() {
+        Path file = Path.of("src/test/resources/snippet-fixtures/SimpleVarChain.java");
+        // `process(name, n);` is on line 7 in SimpleVarChain.
+        var s = extractor.sliceAt(file, 7, 9, "process", 12);
+        assertThat(s.argOrigins()).hasSize(2);
+        var a0 = s.argOrigins().get(0);
+        assertThat(a0.kind()).isEqualTo(ArgOrigin.Kind.LOCAL_VAR);
+        assertThat(a0.paramName()).isEqualTo("name");
+        var a1 = s.argOrigins().get(1);
+        assertThat(a1.kind()).isEqualTo(ArgOrigin.Kind.LOCAL_VAR);
+        assertThat(a1.paramName()).isEqualTo("n");
+    }
 }
