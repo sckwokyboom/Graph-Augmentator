@@ -86,6 +86,12 @@ public final class AstSnippetExtractor {
 
         Set<String> seeds = new LinkedHashSet<>();
         List<ArgOrigin> argOrigins = classifyArguments(callNode, seeds);
+        // Also seed on the call's receiver (e.g. `layout` in `layout.layout(null, values)`)
+        // — the LLM benefits from seeing where the receiver was constructed too. ArgOrigin
+        // already covers explicit arguments; the receiver feeds the slice only.
+        if (callNode instanceof MethodCallExpr mc) {
+            mc.getScope().ifPresent(scope -> addAllNames(scope, seeds));
+        }
         SliceResult sliced = backwardSlice(enclosing, callNode, argOrigins, seeds,
                 maxSliceStmts, entry.rawLines);
 
