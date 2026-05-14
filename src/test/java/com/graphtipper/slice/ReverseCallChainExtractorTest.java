@@ -86,8 +86,9 @@ class ReverseCallChainExtractorTest {
     }
 
     @Test
-    void capsResultsAtMaxChains() {
-        // Create a fan-out: 200 tests each calling target.
+    void extractsAllReachableChainsRegardlessOfLegacyMaxChainsArg() {
+        // V2: the constructor's maxChains argument is ignored — every reachable test
+        // chain is collected. The rendering layer caps for budget.md.
         var b = Gb.graph().method("p.A.target").done();
         for (int i = 0; i < 200; i++) {
             b = b.method("p.T.t" + i).testFlag(true).done()
@@ -96,25 +97,7 @@ class ReverseCallChainExtractorTest {
         var g = b.build();
         var target = (Node.Method) g.byFqn("p.A.target").get(0);
         var result = new ReverseCallChainExtractor(4).extract(g, target);
-        assertThat(result.chains()).hasSize(4);
-    }
-
-    @Test
-    void truncatesWhenFrontierExceedsGuard() {
-        // An intermediate (non-test) node with 50 callers, none of which are tests.
-        // With maxChains=2, frontierGuard = 2*8 = 16. After the intermediate's
-        // 50 callers are enqueued in a single iteration, the guard trips on the
-        // next pop. No chains have been harvested, so truncated=true is observable.
-        var b = Gb.graph()
-            .method("p.A.target").done()
-            .method("p.Bridge.b").done()
-            .calls("p.Bridge.b", "p.A.target");
-        for (int i = 0; i < 50; i++) {
-            b = b.method("p.X.x" + i).done().calls("p.X.x" + i, "p.Bridge.b");
-        }
-        var g = b.build();
-        var target = (com.graphtipper.model.Node.Method) g.byFqn("p.A.target").get(0);
-        var result = new ReverseCallChainExtractor(2).extract(g, target);
-        assertThat(result.truncated()).isTrue();
+        assertThat(result.chains()).hasSize(200);
+        assertThat(result.truncated()).isFalse();
     }
 }

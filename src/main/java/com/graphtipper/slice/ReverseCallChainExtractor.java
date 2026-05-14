@@ -4,11 +4,19 @@ import com.graphtipper.model.*;
 import java.util.*;
 
 public final class ReverseCallChainExtractor {
-    private final int maxChains;
+    /** Hard ceiling on frontier size to prevent runaway BFS on pathological graphs. */
+    private static final int FRONTIER_GUARD = 100_000;
 
-    public ReverseCallChainExtractor(int maxChains) {
-        this.maxChains = maxChains;
+    @SuppressWarnings("unused") // Legacy constructor parameter. V2 extracts every reachable
+    // chain; capping happens at the rendering layer (BudgetPlanner.maxChains for budget.md).
+    private final int legacyMaxChainsIgnored;
+
+    public ReverseCallChainExtractor(int legacyMaxChains) {
+        this.legacyMaxChainsIgnored = legacyMaxChains;
     }
+
+    /** Default no-arg constructor for callers that don't care about the legacy knob. */
+    public ReverseCallChainExtractor() { this(Integer.MAX_VALUE); }
 
     public ChainResult extract(ProjectGraph g, Node.Method target) {
         // BFS upward: each frontier element is a partial path ending at some method.
@@ -19,9 +27,6 @@ public final class ReverseCallChainExtractor {
         Deque<Path> frontier = new ArrayDeque<>();
         Set<String> visitedEdges = new HashSet<>();
         frontier.add(new Path(target.id(), List.of()));
-        // When maxChains is effectively unbounded (Integer.MAX_VALUE under --no-budget),
-        // keep the frontier guard unbounded too instead of overflowing on `* 8`.
-        int frontierGuard = (maxChains > Integer.MAX_VALUE / 8) ? Integer.MAX_VALUE : maxChains * 8;
         boolean truncated = false;
 
         while (!frontier.isEmpty()) {
@@ -33,10 +38,9 @@ public final class ReverseCallChainExtractor {
                 Collections.reverse(reversed);
                 int v = (int) reversed.stream().filter(CallStep::viaVirtual).count();
                 chains.add(new Chain(current, reversed, v));
-                if (chains.size() >= maxChains) break;
                 continue;
             }
-            if (frontier.size() > frontierGuard) { truncated = true; break; }
+            if (frontier.size() > FRONTIER_GUARD) { truncated = true; break; }
             for (Edge.Calls in : g.incomingCalls(p.methodId())) {
                 String edgeKey = in.fromId() + "->" + in.toId();
                 if (!visitedEdges.add(edgeKey)) continue;
@@ -72,17 +76,16 @@ public final class ReverseCallChainExtractor {
     }
 
     /**
-     * V1 simplification: tiebreaker is fewer virtual steps (= more direct
-     * dispatch, easier for the agent to follow). The design spec §5.3
-     * originally specified "smaller test method size (number of unique
-     * methods the test touches)"; that requires a secondary BFS per chain
-     * and is deferred to V2.
+     * Sort chains by depth ASC then virtualSteps ASC. No truncation; the rendering layer
+     * (BudgetPlanner / Main) decides how many to keep for each output file.
+     *
+     * The V1 design spec §5.3 also called for a tertiary key — "smaller test method size"
+     * (the number of unique methods the test touches). That requires a secondary BFS per
+     * chain and remains deferred.
      */
     private List<Chain> rank(List<Chain> chains) {
         var sorted = new ArrayList<>(chains);
-        sorted.sort(Comparator
-                .comparingInt(Chain::depth)
-                .thenComparingInt(Chain::virtualSteps));
-        return sorted.subList(0, Math.min(maxChains, sorted.size()));
+        sorted.sort(Comparator.comparingInt(Chain::depth).thenComparingInt(Chain::virtualSteps));
+        return sorted;
     }
 }
