@@ -1,0 +1,120 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["schema_version", "generated_for", "target", "vertices", "edges", "chains", "stats", "degradations"],
+  "properties": {
+    "schema_version": { "type": "string", "const": "1" },
+    "generated_for": {
+      "type": "object",
+      "required": ["project", "commit_hash_proxy", "timestamp"],
+      "properties": {
+        "project": { "type": "string" },
+        "commit_hash_proxy": { "type": "string" },
+        "timestamp": { "type": "string" }
+      }
+    },
+    "target": {
+      "type": "object",
+      "required": ["id", "fqn", "file", "line_start", "line_end", "current_body"],
+      "properties": {
+        "id": { "type": "string", "const": "target" },
+        "fqn": { "type": "string" },
+        "signature": { "type": "string" },
+        "file": { "type": "string" },
+        "line_start": { "type": "integer" },
+        "line_end": { "type": "integer" },
+        "current_body": { "type": "string" }
+      }
+    },
+    "vertices": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "kind", "fqn", "file", "line", "snippet"],
+        "properties": {
+          "id": { "type": "string", "pattern": "^v_(test|method)_" },
+          "kind": { "enum": ["test_method", "intermediate_method"] },
+          "fqn": { "type": "string" },
+          "file": { "type": "string" },
+          "line": { "type": "integer" },
+          "snippet": { "type": "string" },
+          "snippet_truncated": { "type": "boolean" },
+          "warnings": { "type": "array", "items": { "type": "string" } }
+        }
+      }
+    },
+    "edges": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "from", "to", "kind", "call_site", "args", "virtual"],
+        "properties": {
+          "id": { "type": "string", "pattern": "^e_\\d+$" },
+          "from": { "type": "string" },
+          "to": { "type": "string" },
+          "kind": { "type": "string", "const": "calls" },
+          "call_site": {
+            "type": "object",
+            "required": ["file", "line", "code"],
+            "properties": {
+              "file": { "type": ["string", "null"] },
+              "line": { "type": "integer" },
+              "code": { "type": "string" }
+            }
+          },
+          "args": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["index", "origin"],
+              "properties": {
+                "index": { "type": "integer" },
+                "origin": { "type": "string" }
+              }
+            }
+          },
+          "virtual": { "type": "boolean" }
+        }
+      }
+    },
+    "chains": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "depth", "virtual_steps", "path", "edges"],
+        "properties": {
+          "id": { "type": "string", "pattern": "^chain_\\d+$" },
+          "depth": { "type": "integer" },
+          "virtual_steps": { "type": "integer" },
+          "path": { "type": "array", "items": { "type": "string" } },
+          "edges": { "type": "array", "items": { "type": "string" } }
+        }
+      }
+    },
+    "stats": {
+      "type": "object",
+      "required": ["total_chains", "distinct_tests", "vertices", "edges", "truncated"],
+      "properties": {
+        "total_chains": { "type": "integer" },
+        "distinct_tests": { "type": "integer" },
+        "vertices": { "type": "integer" },
+        "edges": { "type": "integer" },
+        "truncated": { "type": "boolean" }
+      }
+    },
+    "degradations": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["kind"],
+        "properties": {
+          "kind": { "type": "string" },
+          "details": { "type": "string" },
+          "file": { "type": "string" },
+          "line": { "type": "integer" },
+          "effect": { "type": "string" }
+        }
+      }
+    }
+  }
+}

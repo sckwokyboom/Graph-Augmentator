@@ -119,4 +119,23 @@ class GraphJsonRendererTest {
         assertThat(edgeArgs.get(0).get("origin").asText()).isEqualTo("literal");
         assertThat(edgeArgs.get(0).get("value").asText()).isEqualTo("1");
     }
+
+    @Test
+    void renderedDocumentValidatesAgainstSchema() throws Exception {
+        var target = method("m:p.C.target", "p.C.target", "src/main/java/p/C.java", 5, false);
+        var t1 = method("m:p.T.t1", "p.T.t1", "src/test/java/p/T.java", 10, true);
+        var artifact = new Artifact(target, "body",
+                List.of(new Chain(t1, List.of(new CallStep(
+                        "m:p.T.t1", "p.T.t1", "m:p.C.target", "p.C.target",
+                        false, "snippet", List.of())), 0)),
+                false, new LocalContext(List.of(), List.of(), List.of()));
+        String doc = new GraphJsonRenderer().render(artifact, "k", "p");
+
+        var factory = com.networknt.schema.JsonSchemaFactory.getInstance(
+                com.networknt.schema.SpecVersion.VersionFlag.V202012);
+        var schema = factory.getSchema(java.nio.file.Files.newInputStream(
+                java.nio.file.Path.of("src/test/resources/graph-schema.json")));
+        var errors = schema.validate(new ObjectMapper().readTree(doc));
+        assertThat(errors).isEmpty();
+    }
 }
