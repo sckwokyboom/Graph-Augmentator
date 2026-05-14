@@ -105,8 +105,17 @@ public final class AstSnippetExtractor {
             if (prev != null && s.getBegin().get().line > prev.getEnd().get().line + 1) {
                 body.add("    // ...");
             }
-            String code = String.join("\n", rawLines.subList(
-                    s.getBegin().get().line - 1, s.getEnd().get().line));
+            String code;
+            if (s instanceof IfStmt || s instanceof WhileStmt || s instanceof ForStmt
+                    || s instanceof ForEachStmt || s instanceof TryStmt) {
+                // Render only the header line for control structures — the slice walk has
+                // already pulled in any inner statements that contribute to the call's data.
+                code = rawLines.get(s.getBegin().get().line - 1);
+                if (!code.trim().endsWith("{")) code = code + " {";
+            } else {
+                code = String.join("\n", rawLines.subList(
+                        s.getBegin().get().line - 1, s.getEnd().get().line));
+            }
             body.add(code);
             prev = s;
         }
@@ -236,6 +245,19 @@ public final class AstSnippetExtractor {
             }
         }
         if (!needed.isEmpty() && selected.size() >= maxSliceStmts) truncated = true;
+
+        // Capture headers of enclosing control structures (if/while/for/try) so the
+        // rendered snippet shows the code path that leads to the call.
+        Node ctxNode = callStmt;
+        while (ctxNode != null) {
+            ctxNode = ctxNode.getParentNode().orElse(null);
+            if (ctxNode == null || ctxNode == body) break;
+            if (ctxNode instanceof IfStmt || ctxNode instanceof WhileStmt
+                    || ctxNode instanceof ForStmt || ctxNode instanceof ForEachStmt
+                    || ctxNode instanceof TryStmt) {
+                selected.add((Statement) ctxNode);
+            }
+        }
 
         return new SliceResult(selected, refined, truncated);
     }

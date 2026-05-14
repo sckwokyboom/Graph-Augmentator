@@ -133,4 +133,23 @@ class AstSnippetExtractorTest {
         var s = extractor.sliceAt(file, 10, 9, "use", 2);
         assertThat(s.truncated()).isTrue();
     }
+
+    @Test
+    void includesEnclosingIfHeader() {
+        Path file = Path.of("src/test/resources/snippet-fixtures/NestedBlocks.java");
+        var s = extractor.sliceAt(file, 7, 13, "use", 12);
+        String body = String.join("\n", s.renderedBody());
+        assertThat(body).contains("int v = 7;");
+        assertThat(body).contains("if (cond)");
+        assertThat(body).contains("use(v)");
+    }
+
+    @Test
+    void renderedBodyStartsWithSignatureAndEndsWithBrace() {
+        Path file = Path.of("src/test/resources/snippet-fixtures/SimpleVarChain.java");
+        // `process(name, n);` is on line 7 in SimpleVarChain.
+        var s = extractor.sliceAt(file, 7, 9, "process", 12);
+        assertThat(s.renderedBody().get(0)).contains("runChain");
+        assertThat(s.renderedBody().get(s.renderedBody().size() - 1).trim()).isEqualTo("}");
+    }
 }
