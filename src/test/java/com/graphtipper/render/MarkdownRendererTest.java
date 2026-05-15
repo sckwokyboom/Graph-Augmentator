@@ -97,6 +97,35 @@ class MarkdownRendererTest {
     }
 
     @Test
+    void cluster_renders_behavior_signals_when_present() {
+        var target = new com.graphtipper.model.Node.Method("m_t", "T.target", "T.target",
+                java.util.List.of(), "void", "T.java", 1, 5, null, false, false, java.util.List.of());
+        var test1 = new com.graphtipper.model.Node.Method("m1", "T1.x", "T1.x",
+                java.util.List.of(), "void", "T1.java", 1, 1, null, true, false, java.util.List.of());
+        var member = new com.graphtipper.slice.ClusterMember(test1, java.util.List.of(),
+                new com.graphtipper.slice.Oracle.None());
+        var sig = new com.graphtipper.slice.PathSignature(java.util.List.of("E.entry", "C.consumer", "target"));
+        var signals = java.util.List.of(
+                new com.graphtipper.slice.BehaviorSignal("arg1_propagates_to_oracle", "ev"),
+                new com.graphtipper.slice.BehaviorSignal("arg0_invariant_in_cluster", "all same"));
+        var cluster = new com.graphtipper.slice.PathCluster(sig, "E.entry", "C.consumer", 3,
+                java.util.List.of(member), signals);
+        var consumer = new com.graphtipper.slice.ConsumerContract(
+                "C.consumer", "F.java", 1, "body",
+                com.graphtipper.slice.ReturnValueUsage.empty(),
+                com.graphtipper.slice.ExceptionHandlingNearCall.none(),
+                java.util.List.of(), java.util.List.of(cluster), 1);
+        var artifact = new Artifact(target, "", java.util.List.of(), java.util.List.of(),
+                java.util.List.of(consumer), java.util.List.of(), false,
+                new com.graphtipper.slice.LocalContext(java.util.List.of(), java.util.List.of()));
+        var budget = new com.graphtipper.util.TokenBudget(20000); budget.charge(100);
+        String md = new MarkdownRenderer().render(artifact, budget, "abc", "proj");
+        assertThat(md).contains("Behavior signals");
+        assertThat(md).contains("arg1_propagates_to_oracle");
+        assertThat(md).contains("arg0_invariant_in_cluster");
+    }
+
+    @Test
     void path_cluster_renders_with_differential_matrix() {
         var target = new com.graphtipper.model.Node.Method(
                 "m_t", "T.target", "T.target", java.util.List.of(), "void",

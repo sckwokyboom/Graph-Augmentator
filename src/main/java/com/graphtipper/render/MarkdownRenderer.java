@@ -253,6 +253,24 @@ public final class MarkdownRenderer {
             return;
         }
 
+        var argRenderer = new ArgRenderer();
+
+        // Singleton: compact rendering, skip differential matrix.
+        if (cluster.members().size() == 1) {
+            var only = cluster.members().get(0);
+            sb.append("**Single observation:** `").append(only.testMethod().fqn())
+              .append("` (").append(only.testMethod().file()).append(":")
+              .append(only.testMethod().lineStart()).append(")\n");
+            sb.append("**Args at target:** ").append(argRenderer.renderTuple(only.argsAtTarget())).append("\n");
+            sb.append("**Oracle:** ").append(renderOracle(only.oracle())).append("\n\n");
+            if (!cluster.signals().isEmpty()) {
+                sb.append("**Behavior signals:**\n");
+                for (var s : cluster.signals()) sb.append("- `").append(s.tag()).append("`\n");
+                sb.append("\n");
+            }
+            return;
+        }
+
         // Primary representative = first member.
         var primary = cluster.members().get(0);
         sb.append("**Primary representative:** `").append(primary.testMethod().fqn())
@@ -264,7 +282,6 @@ public final class MarkdownRenderer {
           .append(" representatives of ").append(cluster.members().size()).append("):**\n\n");
         sb.append("| Test | Args at target | Oracle |\n");
         sb.append("|---|---|---|\n");
-        var argRenderer = new ArgRenderer();
         int rows = Math.min(cluster.members().size(), 5);
         for (int i = 0; i < rows; i++) {
             var m = cluster.members().get(i);
@@ -277,6 +294,18 @@ public final class MarkdownRenderer {
               .append(" more tests with similar profile** (see JSON sidecar)\n");
         }
         sb.append("\n");
+
+        if (!cluster.signals().isEmpty()) {
+            sb.append("**Behavior signals (from differential analysis):**\n");
+            for (var s : cluster.signals()) {
+                sb.append("- `").append(s.tag()).append("`");
+                if (s.evidence() != null && !s.evidence().isBlank()) {
+                    sb.append(": ").append(s.evidence());
+                }
+                sb.append("\n");
+            }
+            sb.append("\n");
+        }
     }
 
     private static String renderPathSignature(com.graphtipper.slice.PathSignature sig) {
