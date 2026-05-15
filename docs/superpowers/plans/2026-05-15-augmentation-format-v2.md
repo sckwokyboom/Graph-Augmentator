@@ -3165,7 +3165,484 @@ git commit -m "feat(slice): DifferentialAnalyzer detects oracle_independent/vari
 
 ---
 
-> **Remaining tasks (23–37) continue below.** Each follows the same TDD template.
+## Task 23: Extend `Artifact` with `directTests`, `consumers`, `longTailSingletons`
+
+**Files:**
+- Modify: `src/main/java/com/graphtipper/render/Artifact.java`
+- Modify: any compile sites that construct `Artifact` (currently `Main.java`; the test code may construct it too)
+
+- [ ] **Step 1: Check callers**
+
+Run: `grep -rn "new Artifact(" /Users/sckwoky/Projects/Graph-Tipper/src --include="*.java"`
+Expected: at most a handful of construction sites — note them; they all need new fields.
+
+- [ ] **Step 2: Replace `Artifact` record**
+
+Replace `src/main/java/com/graphtipper/render/Artifact.java`:
+
+```java
+package com.graphtipper.render;
+
+import com.graphtipper.model.Node;
+import com.graphtipper.slice.Chain;
+import com.graphtipper.slice.ConsumerContract;
+import com.graphtipper.slice.DirectTest;
+import com.graphtipper.slice.LocalContext;
+import com.graphtipper.slice.PathCluster;
+import java.util.List;
+
+/**
+ * Bundles all data feeding the renderers. v2 adds three new fields:
+ *   {@code directTests}        — Tier A tests that call the target directly
+ *   {@code consumers}          — immediate production consumers, each carrying its clusters
+ *   {@code longTailSingletons} — singleton path clusters (size-1) folded into long-tail
+ * The legacy {@code chains} field is retained for {@code GraphJsonRenderer} consumption.
+ */
+public record Artifact(
+        Node.Method target,
+        String currentBody,
+        List<Chain> chains,
+        List<DirectTest> directTests,
+        List<ConsumerContract> consumers,
+        List<PathCluster> longTailSingletons,
+        boolean truncated,
+        LocalContext localContext
+) {
+    public Artifact {
+        chains = List.copyOf(chains);
+        directTests = List.copyOf(directTests);
+        consumers = List.copyOf(consumers);
+        longTailSingletons = List.copyOf(longTailSingletons);
+    }
+
+    /** Convenience: synthesize an Artifact preserving legacy 5-arg construction. */
+    public Artifact(Node.Method target, String currentBody, List<Chain> chains,
+                    boolean truncated, LocalContext localContext) {
+        this(target, currentBody, chains, List.of(), List.of(), List.of(), truncated, localContext);
+    }
+}
+```
+
+- [ ] **Step 3: Run all tests to confirm nothing else breaks compile**
+
+Run: `./gradlew compileJava compileTestJava -q`
+Expected: success. (The 5-arg convenience constructor preserves legacy call sites.)
+
+- [ ] **Step 4: Commit**
+
+```bash
+git add src/main/java/com/graphtipper/render/Artifact.java
+git commit -m "feat(render): Artifact carries directTests, consumers, longTailSingletons"
+```
+
+---
+
+## Task 24: Remove `productionCallSites` from `LocalContext`
+
+**Files:**
+- Modify: `src/main/java/com/graphtipper/slice/LocalContext.java`
+- Modify: `src/main/java/com/graphtipper/slice/LocalContextExtractor.java`
+- Modify: `src/test/java/com/graphtipper/slice/LocalContextExtractorTest.java`
+- Modify: `src/main/java/com/graphtipper/render/MarkdownRenderer.java` (drop call-sites rendering)
+- Modify: `src/main/java/com/graphtipper/render/JsonRenderer.java` (drop field from JSON)
+
+- [ ] **Step 1: Update the test to no longer reference productionCallSites**
+
+Open `src/test/java/com/graphtipper/slice/LocalContextExtractorTest.java`. Find any assertion on `productionCallSites()` and either remove it or convert it to a check that the field is gone.
+
+For each test method that uses `productionCallSites`, replace the assertion block with a comment noting the migration:
+
+```java
+// productionCallSites moved to Artifact.consumers (see ConsumerDeriver); LocalContext no longer carries them.
+```
+
+- [ ] **Step 2: Run test to verify it fails (compile)**
+
+Run: `./gradlew test --tests com.graphtipper.slice.LocalContextExtractorTest -q`
+Expected: compile or assertion failure for the deleted method.
+
+- [ ] **Step 3: Update `LocalContext`**
+
+Replace `src/main/java/com/graphtipper/slice/LocalContext.java`:
+
+```java
+package com.graphtipper.slice;
+
+import com.graphtipper.model.Node;
+import java.util.List;
+
+/** Local context around the target. v2: production call-sites migrated to {@link ConsumerContract}. */
+public record LocalContext(
+        List<SiblingMember> siblings,
+        List<UsedType> usedTypes
+) {
+    public LocalContext {
+        siblings = List.copyOf(siblings);
+        usedTypes = List.copyOf(usedTypes);
+    }
+    public record SiblingMember(String signature, String javadoc, String body, boolean truncated) {}
+    public record UsedType(Node.Type type, List<String> publicMethodSignatures) {}
+}
+```
+
+- [ ] **Step 4: Update `LocalContextExtractor`**
+
+In `src/main/java/com/graphtipper/slice/LocalContextExtractor.java`, find the constructor call for `LocalContext` and remove the third argument (productionCallSites). Remove the code that builds the call-sites list (it's now dead). The class signature changes from `(siblings, usedTypes, productionCallSites)` to `(siblings, usedTypes)`.
+
+- [ ] **Step 5: Update `MarkdownRenderer.renderLocalContext`**
+
+Open `src/main/java/com/graphtipper/render/MarkdownRenderer.java`. In `renderLocalContext`, delete the entire `if (!lc.productionCallSites().isEmpty()) { ... }` block.
+
+- [ ] **Step 6: Update `JsonRenderer`**
+
+Open `src/main/java/com/graphtipper/render/JsonRenderer.java`. Find any field writing for `productionCallSites` and delete it. (Will be re-added under `consumers` in Task 32.)
+
+- [ ] **Step 7: Run all tests**
+
+Run: `./gradlew test -q`
+Expected: all tests pass.
+
+- [ ] **Step 8: Commit**
+
+```bash
+git add src/main/java/com/graphtipper/slice/LocalContext.java \
+        src/main/java/com/graphtipper/slice/LocalContextExtractor.java \
+        src/main/java/com/graphtipper/render/MarkdownRenderer.java \
+        src/main/java/com/graphtipper/render/JsonRenderer.java \
+        src/test/java/com/graphtipper/slice/LocalContextExtractorTest.java
+git commit -m "refactor(slice): drop LocalContext.productionCallSites (migrated to ConsumerContract)"
+```
+
+---
+
+## Task 25: `MarkdownRenderer.renderHeader` with v2 counters
+
+**Files:**
+- Modify: `src/main/java/com/graphtipper/render/MarkdownRenderer.java`
+- Modify: `src/test/java/com/graphtipper/render/MarkdownRendererTest.java`
+
+- [ ] **Step 1: Write the failing test**
+
+Append to `MarkdownRendererTest.java`:
+
+```java
+    @Test
+    void header_carries_v2_counters() {
+        var target = new com.graphtipper.model.Node.Method(
+                "m_t", "T.target", "T.java", 1, 5, null, "", "");
+        var artifact = new Artifact(target, "", java.util.List.of(),
+                /*directTests*/ java.util.List.of(),
+                /*consumers*/ java.util.List.of(),
+                /*longTailSingletons*/ java.util.List.of(),
+                /*truncated*/ false,
+                new com.graphtipper.slice.LocalContext(java.util.List.of(), java.util.List.of()));
+        var budget = new com.graphtipper.util.TokenBudget(20000);
+        budget.charge(100);
+        String md = new MarkdownRenderer().render(artifact, budget, "abc", "proj");
+        assertThat(md).contains("Consumers: 0 · Path clusters: 0 (covering 0/0 chains, 0%)");
+        assertThat(md).contains("Direct tests: 0 · Long-tail singletons: 0");
+    }
+```
+
+(Verify your local `TokenBudget` API matches; adjust the `charge` / `used` method names if different.)
+
+- [ ] **Step 2: Run test to verify it fails**
+
+Run: `./gradlew test --tests com.graphtipper.render.MarkdownRendererTest -q`
+Expected: failure — current header doesn't have the new counters.
+
+- [ ] **Step 3: Update `render` method in `MarkdownRenderer.java`**
+
+Replace the header section of the `render` method. Find:
+
+```java
+        sb.append("> Budget: ").append(budget.used()).append(" / ").append(maxLabel).append(" tokens · Chains: ")
+          .append(a.chains().size()).append(" · Truncated: ").append(a.truncated()).append("\n\n");
+```
+
+Replace with:
+
+```java
+        int consumerCount = a.consumers().size();
+        int clusterCount = a.consumers().stream().mapToInt(c -> c.clusters().size()).sum();
+        int coveredChains = a.consumers().stream().mapToInt(c -> c.chainsCovered()).sum();
+        int totalChains = a.chains().size();
+        int pct = totalChains == 0 ? 0 : (int) ((coveredChains * 100L) / totalChains);
+        sb.append("> Budget: ").append(budget.used()).append(" / ").append(maxLabel).append(" tokens\n");
+        sb.append("> Consumers: ").append(consumerCount)
+          .append(" · Path clusters: ").append(clusterCount)
+          .append(" (covering ").append(coveredChains).append("/").append(totalChains)
+          .append(" chains, ").append(pct).append("%)\n");
+        sb.append("> Direct tests: ").append(a.directTests().size())
+          .append(" · Long-tail singletons: ").append(a.longTailSingletons().size())
+          .append("\n\n");
+```
+
+- [ ] **Step 4: Run test to verify it passes**
+
+Run: `./gradlew test --tests com.graphtipper.render.MarkdownRendererTest -q`
+Expected: tests pass.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add src/main/java/com/graphtipper/render/MarkdownRenderer.java \
+        src/test/java/com/graphtipper/render/MarkdownRendererTest.java
+git commit -m "feat(render): header carries v2 counters (consumers, clusters, coverage)"
+```
+
+---
+
+## Task 26: `MarkdownRenderer.renderDirectTests`
+
+**Files:**
+- Modify: `src/main/java/com/graphtipper/render/MarkdownRenderer.java`
+- Modify: `src/test/java/com/graphtipper/render/MarkdownRendererTest.java`
+
+- [ ] **Step 1: Write the failing test**
+
+Append to `MarkdownRendererTest.java`:
+
+```java
+    @Test
+    void direct_tests_section_renders_table_and_snippets() {
+        var target = new com.graphtipper.model.Node.Method(
+                "m_t", "T.target", "T.java", 1, 5, null, "", "");
+        var testMethod = new com.graphtipper.model.Node.Method(
+                "m_test", "HelpTest.directCall", "HelpTest.java", 100, 110, null, "", "");
+        var directTest = new com.graphtipper.slice.DirectTest(
+                testMethod,
+                java.util.List.of(com.graphtipper.slice.ArgOrigin.literal(0, "1", "HelpTest.java", 101)),
+                new com.graphtipper.slice.Oracle.Exception("IllegalArgumentException"),
+                "@Test void directCall() { tt.target(1); }");
+        var artifact = new Artifact(target, "", java.util.List.of(),
+                java.util.List.of(directTest),
+                java.util.List.of(), java.util.List.of(), false,
+                new com.graphtipper.slice.LocalContext(java.util.List.of(), java.util.List.of()));
+        var budget = new com.graphtipper.util.TokenBudget(20000); budget.charge(100);
+        String md = new MarkdownRenderer().render(artifact, budget, "abc", "proj");
+        assertThat(md).contains("## Direct tests");
+        assertThat(md).contains("HelpTest.directCall");
+        assertThat(md).contains("throws IllegalArgumentException");
+        assertThat(md).contains("tt.target(1)");
+    }
+```
+
+- [ ] **Step 2: Run test to verify it fails**
+
+Run: `./gradlew test --tests com.graphtipper.render.MarkdownRendererTest -q`
+Expected: failure — section doesn't render.
+
+- [ ] **Step 3: Add `renderDirectTests` to `MarkdownRenderer`**
+
+In `MarkdownRenderer.java`, after `renderTarget(sb, a)` call in `render`, add:
+
+```java
+        renderDirectTests(sb, a);
+```
+
+Add the method:
+
+```java
+    private void renderDirectTests(StringBuilder sb, Artifact a) {
+        if (a.directTests().isEmpty()) return;
+        sb.append("## Direct tests\n\n");
+        sb.append("| Test (file:line) | Args | Oracle |\n");
+        sb.append("|---|---|---|\n");
+        var argRenderer = new ArgRenderer();
+        for (var dt : a.directTests()) {
+            sb.append("| `").append(dt.testMethod().fqn()).append("` (")
+              .append(dt.testMethod().file()).append(":").append(dt.testMethod().lineStart()).append(") | ")
+              .append(escapePipes(argRenderer.renderTuple(dt.args()))).append(" | ")
+              .append(escapePipes(renderOracle(dt.oracle()))).append(" |\n");
+        }
+        sb.append("\n**Test sources:**\n");
+        for (var dt : a.directTests()) {
+            sb.append("```java\n// ").append(dt.testMethod().file()).append(":")
+              .append(dt.testMethod().lineStart()).append("\n");
+            sb.append(dt.snippet() == null ? "(snippet unavailable)" : dt.snippet()).append("\n```\n\n");
+        }
+    }
+
+    private static String escapePipes(String s) { return s.replace("|", "\\|"); }
+
+    private static String renderOracle(com.graphtipper.slice.Oracle o) {
+        return switch (o) {
+            case com.graphtipper.slice.Oracle.Equals eq -> "returns " + eq.expected();
+            case com.graphtipper.slice.Oracle.Exception ex -> "throws " + ex.type();
+            case com.graphtipper.slice.Oracle.ExceptionMessage em -> "throws " + em.type() + ".msg "
+                    + (em.kind() == com.graphtipper.slice.Oracle.MatchKind.EXACT ? "==" : "contains")
+                    + " \"" + em.message() + "\"";
+            case com.graphtipper.slice.Oracle.Boolean b -> (b.expected() ? "assertTrue(" : "assertFalse(") + b.expr() + ")";
+            case com.graphtipper.slice.Oracle.Nullability n -> n.expr() + (n.expectNonNull() ? " is non-null" : " is null");
+            case com.graphtipper.slice.Oracle.Contains c -> c.expr() + " contains \"" + c.substring() + "\"";
+            case com.graphtipper.slice.Oracle.None __ -> "<no assertion found>";
+        };
+    }
+```
+
+- [ ] **Step 4: Run test to verify it passes**
+
+Run: `./gradlew test --tests com.graphtipper.render.MarkdownRendererTest -q`
+Expected: tests pass.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add src/main/java/com/graphtipper/render/MarkdownRenderer.java \
+        src/test/java/com/graphtipper/render/MarkdownRendererTest.java
+git commit -m "feat(render): renderDirectTests section (Tier A table + snippets)"
+```
+
+---
+
+## Task 27: `MarkdownRenderer.renderConsumerBlock`
+
+**Files:**
+- Modify: `src/main/java/com/graphtipper/render/MarkdownRenderer.java`
+- Modify: `src/test/java/com/graphtipper/render/MarkdownRendererTest.java`
+
+- [ ] **Step 1: Write the failing test**
+
+Append to `MarkdownRendererTest.java`:
+
+```java
+    @Test
+    void consumer_block_renders_body_slice_usage_and_implications() {
+        var target = new com.graphtipper.model.Node.Method(
+                "m_t", "T.target", "T.java", 1, 5, null, "", "");
+        var consumer = new com.graphtipper.slice.ConsumerContract(
+                "TextTable.addRowValues",
+                "src/main/java/picocli/CommandLine.java",
+                17234,
+                "public TextTable addRowValues(Text... values) { /* body */ }",
+                new com.graphtipper.slice.ReturnValueUsage(
+                        java.util.EnumSet.of(com.graphtipper.slice.UsageKind.ASSIGNED_TO_LOCAL,
+                                com.graphtipper.slice.UsageKind.FIELD_READ,
+                                com.graphtipper.slice.UsageKind.USED_IN_CONDITION),
+                        java.util.List.of("row", "column")),
+                new com.graphtipper.slice.ExceptionHandlingNearCall(false, java.util.List.of()),
+                java.util.List.of(
+                        new com.graphtipper.slice.ImpliedRequirement("MUST return non-null"),
+                        new com.graphtipper.slice.ImpliedRequirement("exceptions propagate to caller as-is")),
+                java.util.List.of(),
+                1511);
+        var artifact = new Artifact(target, "", java.util.List.of(), java.util.List.of(),
+                java.util.List.of(consumer), java.util.List.of(), false,
+                new com.graphtipper.slice.LocalContext(java.util.List.of(), java.util.List.of()));
+        var budget = new com.graphtipper.util.TokenBudget(20000); budget.charge(100);
+        String md = new MarkdownRenderer().render(artifact, budget, "abc", "proj");
+        assertThat(md).contains("## Consumer contracts");
+        assertThat(md).contains("### Consumer 1: TextTable.addRowValues");
+        assertThat(md).contains("Chains covered:** 1511");
+        assertThat(md).contains("public TextTable addRowValues");
+        assertThat(md).contains("row");
+        assertThat(md).contains("MUST return non-null");
+        assertThat(md).contains("exceptions propagate");
+    }
+```
+
+- [ ] **Step 2: Run test to verify it fails**
+
+Run: `./gradlew test --tests com.graphtipper.render.MarkdownRendererTest -q`
+Expected: failure — block doesn't render.
+
+- [ ] **Step 3: Add `renderConsumerContracts` to `MarkdownRenderer`**
+
+In `MarkdownRenderer.java`, in `render(...)`, after `renderDirectTests(sb, a)` add:
+
+```java
+        renderConsumerContracts(sb, a);
+```
+
+Add the methods:
+
+```java
+    private void renderConsumerContracts(StringBuilder sb, Artifact a) {
+        if (a.consumers().isEmpty()) {
+            sb.append("## Consumer contracts\n");
+            sb.append("_(target has no production callers; behavior is defined only by direct tests above)_\n\n");
+            return;
+        }
+        sb.append("## Consumer contracts\n\n");
+        int n = 1;
+        for (var c : a.consumers()) {
+            renderConsumerBlock(sb, c, n++);
+        }
+    }
+
+    private void renderConsumerBlock(StringBuilder sb, com.graphtipper.slice.ConsumerContract c, int n) {
+        sb.append("### Consumer ").append(n).append(": ").append(c.consumerFqn()).append("\n");
+        sb.append("**Chains covered:** ").append(c.chainsCovered()).append("\n");
+        if (c.file() != null && !c.file().isBlank()) {
+            sb.append("**Defined at:** ").append(c.file()).append(":").append(c.line()).append("\n\n");
+        } else {
+            sb.append("\n");
+        }
+        sb.append("**Body slice around call to target:**\n```java\n")
+          .append(c.bodySlice()).append("\n```\n\n");
+
+        sb.append("**Return-value usage (AST-derived):**\n");
+        for (var k : c.returnValueUsage().kinds()) {
+            sb.append("- ").append(humanizeKind(k));
+            if (k == com.graphtipper.slice.UsageKind.FIELD_READ
+                    && !c.returnValueUsage().fieldsRead().isEmpty()) {
+                sb.append(": `").append(String.join("`, `", c.returnValueUsage().fieldsRead())).append("`");
+            }
+            sb.append("\n");
+        }
+        sb.append("\n");
+
+        sb.append("**Exception handling around call:**\n");
+        if (c.exceptionHandling().inTryCatch()) {
+            sb.append("- In try/catch; types caught: ")
+              .append(String.join(", ", c.exceptionHandling().caughtTypes())).append("\n");
+        } else {
+            sb.append("- No try/catch → exceptions propagate to caller as-is\n");
+        }
+        sb.append("\n");
+
+        sb.append("**Implied requirements on target:**\n");
+        for (var r : c.implications()) {
+            sb.append("- ").append(r.text()).append("\n");
+        }
+        sb.append("\n");
+
+        // Path clusters rendered in Task 28.
+    }
+
+    private static String humanizeKind(com.graphtipper.slice.UsageKind k) {
+        return switch (k) {
+            case ASSIGNED_TO_LOCAL -> "Assigned to local";
+            case ASSIGNED_TO_FIELD -> "Assigned to field";
+            case FIELD_READ -> "Field-read";
+            case METHOD_CALL_ON_RESULT -> "Method called on result";
+            case USED_IN_CONDITION -> "Used in branch condition";
+            case USED_IN_LOOP -> "Used in loop bound";
+            case USED_IN_INDEX_EXPR -> "Used in index expression";
+            case PASSED_AS_ARG -> "Passed as argument to another method";
+            case RETURNED_UNCHANGED -> "Returned unchanged by caller";
+            case DISCARDED -> "Discarded (no LHS, no dotted access)";
+        };
+    }
+```
+
+- [ ] **Step 4: Run test to verify it passes**
+
+Run: `./gradlew test --tests com.graphtipper.render.MarkdownRendererTest -q`
+Expected: tests pass.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add src/main/java/com/graphtipper/render/MarkdownRenderer.java \
+        src/test/java/com/graphtipper/render/MarkdownRendererTest.java
+git commit -m "feat(render): renderConsumerBlock (body slice + usage + implications)"
+```
+
+---
+
+> **Remaining tasks (28–37) continue below.** Each follows the same TDD template.
 
 ---
 
