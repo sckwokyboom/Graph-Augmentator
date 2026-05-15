@@ -192,4 +192,41 @@ class ConsumerDeriverTest {
         assertThat(ex.inTryCatch()).isTrue();
         assertThat(ex.caughtTypes()).contains("IOException", "IllegalStateException");
     }
+
+    @Test
+    void derive_assembles_consumer_contracts_grouped_by_consumer_fqn() {
+        // Two clusters that both funnel through consumer A; one through consumer B.
+        var sigA1 = new PathSignature(List.of("E1.entry", "consumerfix.MultiCallConsumer.useAssignAndFieldRead", "target"));
+        var sigA2 = new PathSignature(List.of("E2.entry", "consumerfix.MultiCallConsumer.useAssignAndFieldRead", "target"));
+        var sigB = new PathSignature(List.of("E3.entry", "consumerfix.MultiCallConsumer.useDiscarded", "target"));
+        var clusterA1 = new PathCluster(sigA1, "E1.entry", "consumerfix.MultiCallConsumer.useAssignAndFieldRead",
+                3, List.of(stubMember("Test.a")), List.of());
+        var clusterA2 = new PathCluster(sigA2, "E2.entry", "consumerfix.MultiCallConsumer.useAssignAndFieldRead",
+                3, List.of(stubMember("Test.b"), stubMember("Test.c")), List.of());
+        var clusterB = new PathCluster(sigB, "E3.entry", "consumerfix.MultiCallConsumer.useDiscarded",
+                3, List.of(stubMember("Test.d")), List.of());
+
+        var d = new ConsumerDeriver(new AstSnippetExtractor());
+        // Construct a mini fileMap that the deriver can use to look up consumer source.
+        var contracts = d.derive(List.of(clusterA1, clusterA2, clusterB), "target",
+                fqn -> {
+                    if (fqn.startsWith("consumerfix.MultiCallConsumer."))
+                        return consumerFixture("MultiCallConsumer.java");
+                    return null;
+                });
+
+        assertThat(contracts).hasSize(2);
+        var assignContract = contracts.stream()
+                .filter(c -> c.consumerFqn().endsWith("useAssignAndFieldRead"))
+                .findFirst().orElseThrow();
+        assertThat(assignContract.chainsCovered()).isEqualTo(3); // 1 + 2
+        assertThat(assignContract.clusters()).hasSize(2);
+        assertThat(assignContract.returnValueUsage().kinds()).contains(UsageKind.ASSIGNED_TO_LOCAL);
+        assertThat(assignContract.implications()).isNotEmpty();
+    }
+
+    private ClusterMember stubMember(String testFqn) {
+        var node = new com.graphtipper.model.Node.Method("m_" + testFqn, testFqn, "", List.of(), "", "Test.java", 1, 10, "", true, false, List.of());
+        return new ClusterMember(node, List.of(), new Oracle.None());
+    }
 }

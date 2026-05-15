@@ -12,6 +12,7 @@ import com.github.javaparser.ast.stmt.*;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.EnumSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Optional;
 
@@ -26,6 +27,12 @@ public final class ConsumerDeriver {
 
     public ConsumerDeriver(AstSnippetExtractor snippetExtractor) {
         this.snippetExtractor = snippetExtractor;
+    }
+
+    /** Source-file resolver: maps a consumer FQN to the .java file that defines it. */
+    @FunctionalInterface
+    public interface FileResolver {
+        java.nio.file.Path resolve(String consumerFqn);
     }
 
     /** Walk the consumer's method body, classify how target's return value is used. */
@@ -199,5 +206,50 @@ public final class ConsumerDeriver {
         } catch (Exception e) {
             return Optional.empty();
         }
+    }
+
+    /**
+     * Group clusters by their immediate consumer; for each consumer, build a
+     * {@link ConsumerContract} with body slice + usage classification + implications.
+     * Returns contracts sorted by total chains covered (desc).
+     */
+    public java.util.List<ConsumerContract> derive(
+            java.util.List<PathCluster> clusters, String targetSimpleName, FileResolver resolver) {
+        var byConsumer = new LinkedHashMap<String, java.util.List<PathCluster>>();
+        for (PathCluster c : clusters) {
+            byConsumer.computeIfAbsent(c.immediateConsumer(), k -> new ArrayList<>()).add(c);
+        }
+        var out = new ArrayList<ConsumerContract>();
+        for (var e : byConsumer.entrySet()) {
+            String consumerFqn = e.getKey();
+            java.util.List<PathCluster> consumerClusters = e.getValue();
+            int chainsCovered = consumerClusters.stream().mapToInt(PathCluster::chainsCovered).sum();
+            java.nio.file.Path file = resolver.resolve(consumerFqn);
+            String bodySlice = "(source unavailable)";
+            ReturnValueUsage usage = ReturnValueUsage.empty();
+            ExceptionHandlingNearCall exHandling = ExceptionHandlingNearCall.none();
+            int line = -1;
+            String fileStr = "";
+            if (file != null) {
+                bodySlice = nullSafe(snippetExtractor.sliceConsumerBody(file, consumerFqn, targetSimpleName));
+                usage = classifyReturnValueUsage(file, consumerFqn, targetSimpleName);
+                exHandling = classifyExceptionHandling(file, consumerFqn, targetSimpleName);
+                fileStr = file.toString();
+                line = locateLine(file, consumerFqn);
+            }
+            var implications = ImpliedRequirementTemplates.derive(usage, exHandling);
+            out.add(new ConsumerContract(consumerFqn, fileStr, line, bodySlice, usage, exHandling,
+                    implications, consumerClusters, chainsCovered));
+        }
+        out.sort((a, b) -> Integer.compare(b.chainsCovered(), a.chainsCovered()));
+        return out;
+    }
+
+    private static String nullSafe(String s) { return s == null ? "(unavailable)" : s; }
+
+    private int locateLine(java.nio.file.Path file, String fqn) {
+        var mdOpt = findMethod(file, fqn);
+        if (mdOpt.isEmpty()) return -1;
+        return mdOpt.get().getBegin().map(p -> p.line).orElse(-1);
     }
 }
