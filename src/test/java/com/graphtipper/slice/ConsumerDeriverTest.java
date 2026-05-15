@@ -105,4 +105,59 @@ class ConsumerDeriverTest {
         assertThat(dt.oracle()).isInstanceOf(Oracle.None.class);
         assertThat(dt.snippet()).contains("@Test");
     }
+
+    private java.nio.file.Path consumerFixture(String name) {
+        return java.nio.file.Paths.get("src/test/resources/consumer-fixtures", name);
+    }
+
+    @Test
+    void classifyReturnValueUsage_detects_assign_and_field_read() {
+        var d = new ConsumerDeriver(new AstSnippetExtractor());
+        var usage = d.classifyReturnValueUsage(
+            consumerFixture("MultiCallConsumer.java"),
+            "consumerfix.MultiCallConsumer.useAssignAndFieldRead",
+            "target");
+        assertThat(usage.kinds()).contains(UsageKind.ASSIGNED_TO_LOCAL, UsageKind.FIELD_READ);
+        assertThat(usage.fieldsRead()).contains("row");
+    }
+
+    @Test
+    void classifyReturnValueUsage_detects_condition() {
+        var d = new ConsumerDeriver(new AstSnippetExtractor());
+        var usage = d.classifyReturnValueUsage(
+            consumerFixture("MultiCallConsumer.java"),
+            "consumerfix.MultiCallConsumer.useInCondition",
+            "target");
+        assertThat(usage.kinds()).contains(UsageKind.USED_IN_CONDITION);
+    }
+
+    @Test
+    void classifyReturnValueUsage_detects_returned_unchanged() {
+        var d = new ConsumerDeriver(new AstSnippetExtractor());
+        var usage = d.classifyReturnValueUsage(
+            consumerFixture("MultiCallConsumer.java"),
+            "consumerfix.MultiCallConsumer.useReturnedUnchanged",
+            "target");
+        assertThat(usage.kinds()).contains(UsageKind.RETURNED_UNCHANGED);
+    }
+
+    @Test
+    void classifyReturnValueUsage_detects_discarded() {
+        var d = new ConsumerDeriver(new AstSnippetExtractor());
+        var usage = d.classifyReturnValueUsage(
+            consumerFixture("MultiCallConsumer.java"),
+            "consumerfix.MultiCallConsumer.useDiscarded",
+            "target");
+        assertThat(usage.kinds()).contains(UsageKind.DISCARDED);
+    }
+
+    @Test
+    void classifyReturnValueUsage_detects_passed_as_arg() {
+        var d = new ConsumerDeriver(new AstSnippetExtractor());
+        var usage = d.classifyReturnValueUsage(
+            consumerFixture("MultiCallConsumer.java"),
+            "consumerfix.MultiCallConsumer.usePassedAsArg",
+            "target");
+        assertThat(usage.kinds()).contains(UsageKind.PASSED_AS_ARG);
+    }
 }
