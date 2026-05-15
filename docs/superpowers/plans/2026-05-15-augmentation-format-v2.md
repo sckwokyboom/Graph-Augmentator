@@ -4480,6 +4480,10 @@ In `Main.java`, alongside existing `@Option` fields, add:
             description = "Max consumer blocks rendered before cut-off (default 5)")
     int consumerCap = 5;
 
+    // Per spec §7.3: --max-chains default raised from 16 → 5000. The cap is now a hard ceiling,
+    // not the selection mechanism (selection is per-cluster). Locate the existing
+    // `@Option(names = "--max-chains") int maxChains = 16;` and change the default to 5000.
+
     @picocli.CommandLine.Option(names = "--cluster-cap",
             description = "Max path clusters per consumer block (default 10)")
     int clusterCap = 10;
