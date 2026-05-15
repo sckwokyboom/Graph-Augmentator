@@ -32,9 +32,7 @@ class MarkdownRendererTest {
         assertThat(md).contains("## Target");
         assertThat(md).contains("Writes value");
         assertThat(md).contains("return null;");
-        assertThat(md).contains("## Test Chains");
-        assertThat(md).contains("Chain 1");
-        assertThat(md).contains("p.T.t1");
+        assertThat(md).contains("## Consumer contracts");
         assertThat(md).contains("## Local Context");
         assertThat(md).contains("## Negative Memory");
         assertThat(md).contains("_(reserved");
@@ -47,53 +45,8 @@ class MarkdownRendererTest {
         var artifact = new Artifact(target, "", List.of(), false,
                 new LocalContext(List.of(), List.of()));
         var md = new MarkdownRenderer().render(artifact, new TokenBudget(20_000), "h", "proj");
-        assertThat(md).contains("No tests transitively reach this target");
-    }
-
-    @Test
-    void rendersNonLiteralArgOriginsCleanly() {
-        var g = Gb.graph()
-            .method("p.T.t1").testFlag(true).file("T.java").done()
-            .method("p.C.target").file("C.java").done()
-            .build();
-        var target = (Node.Method) g.byFqn("p.C.target").get(0);
-        var test = (Node.Method) g.byFqn("p.T.t1").get(0);
-        var origins = List.of(
-                ArgOrigin.parameter(0, "x:int"),
-                ArgOrigin.field(1, "p.C.y"),
-                ArgOrigin.factoryCall(2, "p.F.make", "F.java", 7),
-                ArgOrigin.unknown(3));
-        var step = new CallStep(test.id(), "p.T.t1", target.id(), "p.C.target",
-                false, "  target();", origins);
-        var artifact = new Artifact(target, "", List.of(new Chain(test, List.of(step), 0)), false,
-                new LocalContext(List.of(), List.of()));
-        var md = new MarkdownRenderer().render(artifact, new TokenBudget(20_000), "h", "p");
-        // Each non-literal line should not end with ")"
-        assertThat(md).contains("parameter `x:int`\n");
-        assertThat(md).contains("field `p.C.y`\n");
-        assertThat(md).contains("factory `p.F.make(...)` — F.java:7\n");
-        assertThat(md).contains("unknown\n");
-        assertThat(md).doesNotContain("unknown)");
-        assertThat(md).doesNotContain("`x:int`)");
-    }
-
-    @Test
-    void rendersLocalVarArgOriginWithDefinitionLine() {
-        var g = Gb.graph()
-            .method("p.T.t1").testFlag(true).file("T.java").done()
-            .method("p.C.target").file("C.java").done()
-            .build();
-        var target = (Node.Method) g.byFqn("p.C.target").get(0);
-        var test = (Node.Method) g.byFqn("p.T.t1").get(0);
-        var origins = List.of(
-                ArgOrigin.localVar(0, "v", "f.java", 17, "int v = 1;"));
-        var step = new CallStep(test.id(), "p.T.t1", target.id(), "p.C.target",
-                false, "  target(v);", origins);
-        var artifact = new Artifact(target, "", List.of(new Chain(test, List.of(step), 0)), false,
-                new LocalContext(List.of(), List.of()));
-        var md = new MarkdownRenderer().render(artifact, new TokenBudget(20_000), "h", "p");
-        assertThat(md).contains("local `v`");
-        assertThat(md).contains("line 17");
+        assertThat(md).contains("## Consumer contracts");
+        assertThat(md).contains("target has no production callers");
     }
 
     @Test

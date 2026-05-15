@@ -4,9 +4,6 @@ import com.graphtipper.slice.*;
 import com.graphtipper.util.TokenBudget;
 import com.graphtipper.model.Node;
 
-import java.util.HashMap;
-import java.util.Map;
-
 public final class MarkdownRenderer {
 
     public String render(Artifact a, TokenBudget budget, String projectKey, String projectName) {
@@ -33,7 +30,6 @@ public final class MarkdownRenderer {
         renderDirectTests(sb, a);
         renderConsumerContracts(sb, a);
         renderLongTail(sb, a);
-        renderChains(sb, a);
         renderLocalContext(sb, a);
         sb.append("## Negative Memory\n_(reserved — not populated in V1)_\n");
         return sb.toString();
@@ -51,99 +47,6 @@ public final class MarkdownRenderer {
         if (a.currentBody() != null && !a.currentBody().isBlank()) {
             sb.append("**Current body:**\n```java\n").append(a.currentBody()).append("\n```\n\n");
         }
-    }
-
-    private void renderChains(StringBuilder sb, Artifact a) {
-        sb.append("## Test Chains\n\n");
-        if (a.chains().isEmpty()) {
-            sb.append("> No tests transitively reach this target.\n\n");
-            return;
-        }
-
-        // Convergent-chain dedup: most large projects have several chains that funnel
-        // through the same intermediate methods (e.g. picocli's 13 test paths all end in
-        // addRowValues → putValue). Without dedup the same caller-body snippet and
-        // arg-origins block repeat per chain, wasting context and burying signal.
-        // Strategy: key each step by (callerFqn → calleeFqn → snippet-hash). The first
-        // chain that emits a given key gets the full render; later chains get a one-line
-        // back-reference. The key includes the snippet so distinct call sites between the
-        // same pair (different line/different dataflow) still render fully.
-        Map<String, Integer> stepFirstSeenInChain = new HashMap<>();
-        int chainNumber = 0;
-
-        for (Chain c : a.chains()) {
-            chainNumber++;
-            sb.append("### Chain ").append(chainNumber).append(" (depth=").append(c.depth())
-              .append(", virtual=").append(c.virtualSteps()).append(")\n");
-            sb.append("**Test:** `").append(c.test().fqn()).append("` — `")
-              .append(c.test().file()).append(":").append(c.test().lineStart()).append("`\n\n");
-            for (CallStep s : c.steps()) {
-                String key = stepKey(s);
-                Integer firstSeen = stepFirstSeenInChain.get(key);
-                if (firstSeen != null) {
-                    // Already shown in full. Emit a short back-reference so the chain
-                    // remains traceable but doesn't repeat content.
-                    sb.append("> _`").append(s.callerFqn()).append("` → `")
-                      .append(s.calleeFqn()).append("` — same as Chain ")
-                      .append(firstSeen).append("_\n\n");
-                    continue;
-                }
-                stepFirstSeenInChain.put(key, chainNumber);
-                sb.append("```java\n// ").append(s.callerFqn()).append("\n");
-                sb.append(s.snippet() == null ? "(snippet unavailable)" : s.snippet()).append("\n```\n");
-                if (!s.argOrigins().isEmpty()) {
-                    sb.append("**Arg origins at `").append(s.calleeFqn()).append("` call:**\n");
-                    for (ArgOrigin o : s.argOrigins()) {
-                        sb.append("- `arg").append(o.argIndex()).append("` = ");
-                        sb.append(renderArgOrigin(o));
-                        sb.append("\n");
-                    }
-                }
-                sb.append("\n");
-            }
-        }
-    }
-
-    private static String stepKey(CallStep s) {
-        String snippet = s.snippet() == null ? "" : s.snippet();
-        return s.callerFqn() + "→" + s.calleeFqn() + "#" + Integer.toHexString(snippet.hashCode());
-    }
-
-    /**
-     * Renders a single ArgOrigin into its markdown fragment. Uses a switch expression so
-     * the compiler enforces exhaustiveness over {@link ArgOrigin.Kind} — adding a new Kind
-     * without updating this method becomes a compile-time error rather than a silently
-     * empty rendering.
-     */
-    private static String renderArgOrigin(ArgOrigin o) {
-        return switch (o.kind()) {
-            case LITERAL -> {
-                var b = new StringBuilder();
-                b.append("`").append(o.value()).append("` (literal");
-                if (o.file() != null) b.append(", ").append(o.file()).append(":").append(o.line());
-                b.append(")");
-                yield b.toString();
-            }
-            case PARAMETER -> "parameter `" + o.paramName() + "`";
-            case FIELD -> "field `" + o.fieldFqn() + "`";
-            case FACTORY_CALL -> {
-                var b = new StringBuilder();
-                b.append("factory `").append(o.factoryFqn()).append("(...)`");
-                if (o.file() != null) b.append(" — ").append(o.file()).append(":").append(o.line());
-                yield b.toString();
-            }
-            case LOCAL_VAR -> o.definedAtLine() > 0
-                    ? "local `" + o.paramName() + "` (defined at line " + o.definedAtLine() + ")"
-                    : "local `" + o.paramName() + "`";
-            case LOOP_VAR -> o.definedAtLine() > 0
-                    ? "loop var `" + o.paramName() + "` (defined at line " + o.definedAtLine() + ")"
-                    : "loop var `" + o.paramName() + "`";
-            case FIELD_ACCESS -> "field access `" + o.exprText() + "`";
-            case METHOD_CALL -> "call `" + o.exprText() + "`";
-            case INDEXED_ACCESS -> "indexed access `" + o.exprText() + "`";
-            case CONSTRUCTOR -> "new `" + o.exprText() + "`";
-            case UNKNOWN -> "unknown";
-        };
     }
 
     private void renderDirectTests(StringBuilder sb, Artifact a) {
