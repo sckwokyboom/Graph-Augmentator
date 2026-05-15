@@ -80,4 +80,39 @@ class PicocliSmokeTest {
                 .as("sliced snippet does not start with a dangling closing brace")
                 .noneMatch(line -> line.trim().equals("}") || line.trim().equals("};"));
     }
+
+    @Test
+    void v2_artifact_for_putValue_is_well_compressed() throws Exception {
+        org.junit.jupiter.api.Assumptions.assumeTrue(
+                System.getenv("GRAPHTIPPER_PICOCLI_HOME") != null,
+                "GRAPHTIPPER_PICOCLI_HOME unset; smoke skipped");
+
+        java.nio.file.Path picocli = java.nio.file.Paths.get(System.getenv("GRAPHTIPPER_PICOCLI_HOME"));
+        java.nio.file.Path out = java.nio.file.Paths.get(System.getProperty("java.io.tmpdir"), "gt-smoke-v2");
+        try { org.assertj.core.util.Files.delete(out.toFile()); } catch (Exception ignored) {}
+        out.toFile().mkdirs();
+
+        int rc = new picocli.CommandLine(new com.graphtipper.cli.Main()).execute(
+                "--project", picocli.toString(),
+                "--target", "src/main/java/picocli/CommandLine.java#TextTable.putValue(int,int,Text)",
+                "--out", out.toString(),
+                "--budget-tokens", "20000");
+        assertThat(rc).isEqualTo(0);
+
+        var budgetMd = java.nio.file.Files.list(out)
+                .filter(p -> p.toString().endsWith(".budget.md"))
+                .findFirst().orElseThrow();
+        var content = java.nio.file.Files.readString(budgetMd);
+        long lineCount = content.lines().count();
+
+        // V2 smoke targets per spec §9.
+        assertThat(lineCount).as("budget.md size").isLessThanOrEqualTo(500);
+        assertThat(content).contains("## Consumer contracts");
+        assertThat(content).contains("addRowValues");  // the immediate consumer
+        assertThat(content).contains("## Direct tests");
+        assertThat(content).contains("Consumers: 1");  // for putValue
+        // ≤ 10 cluster blocks rendered
+        long clusterCount = content.lines().filter(l -> l.startsWith("#### 4.4.")).count();
+        assertThat(clusterCount).isLessThanOrEqualTo(10);
+    }
 }
