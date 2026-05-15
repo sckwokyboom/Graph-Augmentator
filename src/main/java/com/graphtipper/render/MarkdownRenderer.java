@@ -15,8 +15,19 @@ public final class MarkdownRenderer {
         sb.append("> Generated for: ").append(projectName).append(" @ ").append(projectKey).append("\n");
         sb.append("> Target: ").append(a.target().fqn()).append("\n");
         String maxLabel = budget.max() == Integer.MAX_VALUE ? "unlimited" : Integer.toString(budget.max());
-        sb.append("> Budget: ").append(budget.used()).append(" / ").append(maxLabel).append(" tokens · Chains: ")
-          .append(a.chains().size()).append(" · Truncated: ").append(a.truncated()).append("\n\n");
+        int consumerCount = a.consumers().size();
+        int clusterCount = a.consumers().stream().mapToInt(c -> c.clusters().size()).sum();
+        int coveredChains = a.consumers().stream().mapToInt(c -> c.chainsCovered()).sum();
+        int totalChains = a.chains().size();
+        int pct = totalChains == 0 ? 0 : (int) ((coveredChains * 100L) / totalChains);
+        sb.append("> Budget: ").append(budget.used()).append(" / ").append(maxLabel).append(" tokens\n");
+        sb.append("> Consumers: ").append(consumerCount)
+          .append(" · Path clusters: ").append(clusterCount)
+          .append(" (covering ").append(coveredChains).append("/").append(totalChains)
+          .append(" chains, ").append(pct).append("%)\n");
+        sb.append("> Direct tests: ").append(a.directTests().size())
+          .append(" · Long-tail singletons: ").append(a.longTailSingletons().size())
+          .append("\n\n");
 
         renderTarget(sb, a);
         renderChains(sb, a);

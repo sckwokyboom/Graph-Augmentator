@@ -21,6 +21,9 @@ public final class TokenBudget {
         return true;
     }
 
+    /** Unconditionally charges {@code tokens} against the budget (for pre-measured costs). */
+    public void charge(int tokens) { used += tokens; }
+
     public void recordEviction(String section) { evicted.add(section); }
 
     public int used() { return used; }

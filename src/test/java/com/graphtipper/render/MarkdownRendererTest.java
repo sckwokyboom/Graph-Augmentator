@@ -95,4 +95,22 @@ class MarkdownRendererTest {
         assertThat(md).contains("local `v`");
         assertThat(md).contains("line 17");
     }
+
+    @Test
+    void header_carries_v2_counters() {
+        var target = new com.graphtipper.model.Node.Method(
+                "m_t", "T.target", "T.target", java.util.List.of(), "void",
+                "T.java", 1, 5, null, false, false, java.util.List.of());
+        var artifact = new Artifact(target, "", java.util.List.of(),
+                /*directTests*/ java.util.List.of(),
+                /*consumers*/ java.util.List.of(),
+                /*longTailSingletons*/ java.util.List.of(),
+                /*truncated*/ false,
+                new com.graphtipper.slice.LocalContext(java.util.List.of(), java.util.List.of()));
+        var budget = new com.graphtipper.util.TokenBudget(20000);
+        budget.charge(100);
+        String md = new MarkdownRenderer().render(artifact, budget, "abc", "proj");
+        assertThat(md).contains("Consumers: 0 · Path clusters: 0 (covering 0/0 chains, 0%)");
+        assertThat(md).contains("Direct tests: 0 · Long-tail singletons: 0");
+    }
 }
