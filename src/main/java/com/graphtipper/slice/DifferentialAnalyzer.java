@@ -42,6 +42,37 @@ public final class DifferentialAnalyzer {
                         "Substring of arg" + i + " appears in oracle text for ≥2 distinct values"));
             }
         }
+        if (cluster.members().size() >= 2) {
+            // exception_type_consistent_across_cluster
+            String singleType = singleExceptionType(cluster.members());
+            if (singleType != null) {
+                out.add(new BehaviorSignal(
+                        "exception_type_consistent_across_cluster",
+                        "All " + cluster.members().size() + " members throw " + singleType));
+            }
+            // oracle_independent / oracle_varies_only_with_argN
+            boolean oracleVaries = oracleVaries(cluster.members());
+            boolean anyArgVaries = false;
+            int varyingArgs = 0;
+            int singleVaryingIdx = -1;
+            for (int i = 0; i < argCount; i++) {
+                if (!isInvariantAt(cluster.members(), i)) {
+                    anyArgVaries = true;
+                    varyingArgs++;
+                    singleVaryingIdx = i;
+                }
+            }
+            if (!oracleVaries && anyArgVaries) {
+                out.add(new BehaviorSignal(
+                        "oracle_independent_of_target_args",
+                        "Args vary across cluster but oracle is constant"));
+            }
+            if (oracleVaries && varyingArgs == 1) {
+                out.add(new BehaviorSignal(
+                        "oracle_varies_only_with_arg" + singleVaryingIdx,
+                        "Only arg" + singleVaryingIdx + " varies; oracle varies in lockstep"));
+            }
+        }
         return out;
     }
 
@@ -98,5 +129,30 @@ public final class DifferentialAnalyzer {
             case Oracle.Nullability __ -> null;
             case Oracle.None __ -> null;
         };
+    }
+
+    private String singleExceptionType(List<ClusterMember> members) {
+        String type = null;
+        for (var m : members) {
+            String t = switch (m.oracle()) {
+                case Oracle.Exception e -> e.type();
+                case Oracle.ExceptionMessage em -> em.type();
+                default -> null;
+            };
+            if (t == null) return null;
+            if (type == null) type = t;
+            else if (!type.equals(t)) return null;
+        }
+        return type;
+    }
+
+    private boolean oracleVaries(List<ClusterMember> members) {
+        Set<String> distinct = new HashSet<>();
+        for (var m : members) {
+            String text = oracleText(m.oracle());
+            distinct.add(text == null ? "<null>" : text);
+            if (distinct.size() > 1) return true;
+        }
+        return false;
     }
 }

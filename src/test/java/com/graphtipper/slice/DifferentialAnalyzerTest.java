@@ -65,4 +65,37 @@ class DifferentialAnalyzerTest {
         var signals = new DifferentialAnalyzer(new ArgRenderer()).analyze(cluster);
         assertThat(signals).extracting(BehaviorSignal::tag).doesNotContain("arg0_propagates_to_oracle");
     }
+
+    @Test
+    void emits_oracle_independent_when_args_vary_oracle_constant() {
+        var sig = new PathSignature(List.of("E", "C", "target"));
+        var members = List.of(
+            member("T1", List.of(lit(0, "1")), new Oracle.Exception("X")),
+            member("T2", List.of(lit(0, "2")), new Oracle.Exception("X")));
+        var cluster = new PathCluster(sig, "E", "C", 3, members, List.of());
+        var signals = new DifferentialAnalyzer(new ArgRenderer()).analyze(cluster);
+        assertThat(signals).extracting(BehaviorSignal::tag).contains("oracle_independent_of_target_args");
+    }
+
+    @Test
+    void emits_exception_type_consistent_when_all_oracles_same_exception() {
+        var sig = new PathSignature(List.of("E", "C", "target"));
+        var members = List.of(
+            member("T1", List.of(lit(0, "1")), new Oracle.Exception("IAE")),
+            member("T2", List.of(lit(0, "2")), new Oracle.Exception("IAE")));
+        var cluster = new PathCluster(sig, "E", "C", 3, members, List.of());
+        var signals = new DifferentialAnalyzer(new ArgRenderer()).analyze(cluster);
+        assertThat(signals).extracting(BehaviorSignal::tag).contains("exception_type_consistent_across_cluster");
+    }
+
+    @Test
+    void emits_oracle_varies_only_with_argN_when_single_arg_varies_alongside_oracle() {
+        var sig = new PathSignature(List.of("E", "C", "target"));
+        var members = List.of(
+            member("T1", List.of(lit(0, "1"), lit(1, "\"a\"")), new Oracle.Equals("\"x\"", "r")),
+            member("T2", List.of(lit(0, "1"), lit(1, "\"b\"")), new Oracle.Equals("\"y\"", "r")));
+        var cluster = new PathCluster(sig, "E", "C", 3, members, List.of());
+        var signals = new DifferentialAnalyzer(new ArgRenderer()).analyze(cluster);
+        assertThat(signals).extracting(BehaviorSignal::tag).contains("oracle_varies_only_with_arg1");
+    }
 }
