@@ -23,4 +23,15 @@ class PathClustererTest {
         src.add("c");
         assertThat(sig.fqns()).containsExactly("a", "b");
     }
+
+    @Test
+    void pathCluster_carries_signature_and_members() {
+        var sig = new PathSignature(List.of("E.entry", "C.consumer", "target"));
+        var cluster = new PathCluster(sig, "E.entry", "C.consumer", 3, List.of(), List.of());
+        assertThat(cluster.signature()).isEqualTo(sig);
+        assertThat(cluster.entryPoint()).isEqualTo("E.entry");
+        assertThat(cluster.immediateConsumer()).isEqualTo("C.consumer");
+        assertThat(cluster.depth()).isEqualTo(3);
+        assertThat(cluster.chainsCovered()).isZero();
+    }
 }
