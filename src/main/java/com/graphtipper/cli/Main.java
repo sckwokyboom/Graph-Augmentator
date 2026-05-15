@@ -168,32 +168,38 @@ public final class Main implements Callable<Integer> {
             }
 
             // V2 artifact (full chains for legacy renderers, plus new v2 fields).
+            // This is also used directly as fullArtifact (every chain, unbounded).
             var v2Artifact = new Artifact(targetMethod, currentBody, enriched,
                     directTests, consumers, singletonClusters, chainResult.truncated(), lc);
 
-            // Full artifact: every chain, unbounded budget. Used for full.md.
-            var fullArtifact = new Artifact(targetMethod, currentBody, enriched, chainResult.truncated(), lc);
+            // Full artifact: every chain, unbounded budget, with all v2 fields. Used for full.md.
+            var fullArtifact = v2Artifact;
 
-            // Budget artifact: top-maxChains chains, planned for token budget. Used for
-            // budget.md and the legacy <hash>.json (which keeps its old contract).
+            // Budget artifact: top-maxChains chains, planned for token budget using the
+            // cluster-based eviction path (BudgetPlanner.fit). Used for budget.md and
+            // the legacy <hash>.json (which keeps its old contract).
             var topChains = enriched.subList(0, Math.min(maxChains, enriched.size()));
             var budgetArtifactInitial = new Artifact(targetMethod, currentBody, topChains,
-                    chainResult.truncated(), lc);
+                    directTests, consumers, singletonClusters, chainResult.truncated(), lc);
 
-            // Graph artifact: same top-maxChains as budget.md by default. graph.json is
-            // intended for LLM consumption; emitting every chain (often 1000s on real
-            // projects) produces multi-MB output no model can ingest. Users who want the
-            // exhaustive list pull it from full.md or re-run with a larger --max-chains.
+            // Graph artifact: same top-maxChains as budget.md by default, with v2 fields
+            // for consistency. graph.json is intended for LLM consumption; emitting every
+            // chain (often 1000s on real projects) produces multi-MB output no model can
+            // ingest. Users who want the exhaustive list pull it from full.md or re-run
+            // with a larger --max-chains.
             var graphArtifact = new Artifact(targetMethod, currentBody, topChains,
-                    chainResult.truncated(), lc);
+                    directTests, consumers, singletonClusters, chainResult.truncated(), lc);
+
             var budget = new TokenBudget(budgetTokens);
             Artifact budgetArtifact;
             try {
-                budgetArtifact = new BudgetPlanner(budget).plan(budgetArtifactInitial);
+                budgetArtifact = new BudgetPlanner().fit(budgetArtifactInitial, budget);
             } catch (BudgetPlanner.BudgetExceededException e) {
                 System.err.println("budget exceeded on minimum: " + e.getMessage());
                 return 3;
             }
+            // Charge the budget meter so budget.used() reflects the final artifact size.
+            new BudgetPlanner(budget).planNoEvict(budgetArtifact);
 
             var unlimitedBudget = new TokenBudget(Integer.MAX_VALUE);
             new BudgetPlanner(unlimitedBudget).planNoEvict(fullArtifact);
