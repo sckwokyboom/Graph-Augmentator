@@ -97,6 +97,41 @@ class MarkdownRendererTest {
     }
 
     @Test
+    void consumer_block_renders_body_slice_usage_and_implications() {
+        var target = new com.graphtipper.model.Node.Method(
+                "m_t", "T.target", "T.target", java.util.List.of(), "void",
+                "T.java", 1, 5, null, false, false, java.util.List.of());
+        var consumer = new com.graphtipper.slice.ConsumerContract(
+                "TextTable.addRowValues",
+                "src/main/java/picocli/CommandLine.java",
+                17234,
+                "public TextTable addRowValues(Text... values) { /* body */ }",
+                new com.graphtipper.slice.ReturnValueUsage(
+                        java.util.EnumSet.of(com.graphtipper.slice.UsageKind.ASSIGNED_TO_LOCAL,
+                                com.graphtipper.slice.UsageKind.FIELD_READ,
+                                com.graphtipper.slice.UsageKind.USED_IN_CONDITION),
+                        java.util.List.of("row", "column")),
+                new com.graphtipper.slice.ExceptionHandlingNearCall(false, java.util.List.of()),
+                java.util.List.of(
+                        new com.graphtipper.slice.ImpliedRequirement("MUST return non-null"),
+                        new com.graphtipper.slice.ImpliedRequirement("exceptions propagate to caller as-is")),
+                java.util.List.of(),
+                1511);
+        var artifact = new Artifact(target, "", java.util.List.of(), java.util.List.of(),
+                java.util.List.of(consumer), java.util.List.of(), false,
+                new com.graphtipper.slice.LocalContext(java.util.List.of(), java.util.List.of()));
+        var budget = new com.graphtipper.util.TokenBudget(20000); budget.charge(100);
+        String md = new MarkdownRenderer().render(artifact, budget, "abc", "proj");
+        assertThat(md).contains("## Consumer contracts");
+        assertThat(md).contains("### Consumer 1: TextTable.addRowValues");
+        assertThat(md).contains("Chains covered:** 1511");
+        assertThat(md).contains("public TextTable addRowValues");
+        assertThat(md).contains("row");
+        assertThat(md).contains("MUST return non-null");
+        assertThat(md).contains("exceptions propagate");
+    }
+
+    @Test
     void direct_tests_section_renders_table_and_snippets() {
         var target = new com.graphtipper.model.Node.Method(
                 "m_t", "T.target", "T.target", java.util.List.of(), "void",

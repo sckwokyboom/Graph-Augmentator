@@ -31,6 +31,7 @@ public final class MarkdownRenderer {
 
         renderTarget(sb, a);
         renderDirectTests(sb, a);
+        renderConsumerContracts(sb, a);
         renderChains(sb, a);
         renderLocalContext(sb, a);
         sb.append("## Negative Memory\n_(reserved — not populated in V1)_\n");
@@ -162,6 +163,74 @@ public final class MarkdownRenderer {
               .append(dt.testMethod().lineStart()).append("\n");
             sb.append(dt.snippet() == null ? "(snippet unavailable)" : dt.snippet()).append("\n```\n\n");
         }
+    }
+
+    private void renderConsumerContracts(StringBuilder sb, Artifact a) {
+        if (a.consumers().isEmpty()) {
+            sb.append("## Consumer contracts\n");
+            sb.append("_(target has no production callers; behavior is defined only by direct tests above)_\n\n");
+            return;
+        }
+        sb.append("## Consumer contracts\n\n");
+        int n = 1;
+        for (var c : a.consumers()) {
+            renderConsumerBlock(sb, c, n++);
+        }
+    }
+
+    private void renderConsumerBlock(StringBuilder sb, com.graphtipper.slice.ConsumerContract c, int n) {
+        sb.append("### Consumer ").append(n).append(": ").append(c.consumerFqn()).append("\n");
+        sb.append("**Chains covered:** ").append(c.chainsCovered()).append("\n");
+        if (c.file() != null && !c.file().isBlank()) {
+            sb.append("**Defined at:** ").append(c.file()).append(":").append(c.line()).append("\n\n");
+        } else {
+            sb.append("\n");
+        }
+        sb.append("**Body slice around call to target:**\n```java\n")
+          .append(c.bodySlice()).append("\n```\n\n");
+
+        sb.append("**Return-value usage (AST-derived):**\n");
+        for (var k : c.returnValueUsage().kinds()) {
+            sb.append("- ").append(humanizeKind(k));
+            if (k == com.graphtipper.slice.UsageKind.FIELD_READ
+                    && !c.returnValueUsage().fieldsRead().isEmpty()) {
+                sb.append(": `").append(String.join("`, `", c.returnValueUsage().fieldsRead())).append("`");
+            }
+            sb.append("\n");
+        }
+        sb.append("\n");
+
+        sb.append("**Exception handling around call:**\n");
+        if (c.exceptionHandling().inTryCatch()) {
+            sb.append("- In try/catch; types caught: ")
+              .append(String.join(", ", c.exceptionHandling().caughtTypes())).append("\n");
+        } else {
+            sb.append("- No try/catch → exceptions propagate to caller as-is\n");
+        }
+        sb.append("\n");
+
+        sb.append("**Implied requirements on target:**\n");
+        for (var r : c.implications()) {
+            sb.append("- ").append(r.text()).append("\n");
+        }
+        sb.append("\n");
+
+        // Path clusters rendered in Task 28.
+    }
+
+    private static String humanizeKind(com.graphtipper.slice.UsageKind k) {
+        return switch (k) {
+            case ASSIGNED_TO_LOCAL -> "Assigned to local";
+            case ASSIGNED_TO_FIELD -> "Assigned to field";
+            case FIELD_READ -> "Field-read";
+            case METHOD_CALL_ON_RESULT -> "Method called on result";
+            case USED_IN_CONDITION -> "Used in branch condition";
+            case USED_IN_LOOP -> "Used in loop bound";
+            case USED_IN_INDEX_EXPR -> "Used in index expression";
+            case PASSED_AS_ARG -> "Passed as argument to another method";
+            case RETURNED_UNCHANGED -> "Returned unchanged by caller";
+            case DISCARDED -> "Discarded (no LHS, no dotted access)";
+        };
     }
 
     private static String escapePipes(String s) { return s.replace("|", "\\|"); }
