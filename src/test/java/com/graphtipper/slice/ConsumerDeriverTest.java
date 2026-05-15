@@ -95,4 +95,14 @@ class ConsumerDeriverTest {
         assertThat(contract.chainsCovered()).isEqualTo(1511);
         assertThat(contract.implications()).hasSize(1);
     }
+
+    @Test
+    void directTest_carries_test_method_args_oracle_and_snippet() {
+        var method = new com.graphtipper.model.Node.Method(
+            "m_test", "TestClass.t1", "", List.of(), "", "Test.java", 1, 10, "", true, false, List.of());
+        var dt = new DirectTest(method, List.of(), new Oracle.None(), "@Test void t1() {}");
+        assertThat(dt.testMethod().fqn()).isEqualTo("TestClass.t1");
+        assertThat(dt.oracle()).isInstanceOf(Oracle.None.class);
+        assertThat(dt.snippet()).contains("@Test");
+    }
 }
