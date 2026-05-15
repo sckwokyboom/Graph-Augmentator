@@ -160,4 +160,36 @@ class ConsumerDeriverTest {
             "target");
         assertThat(usage.kinds()).contains(UsageKind.PASSED_AS_ARG);
     }
+
+    @Test
+    void classifyExceptionHandling_detects_try_catch_around_target() {
+        var d = new ConsumerDeriver(new AstSnippetExtractor());
+        var ex = d.classifyExceptionHandling(
+            consumerFixture("TryCatchConsumer.java"),
+            "consumerfix.TryCatchConsumer.wrappedConsumer",
+            "target");
+        assertThat(ex.inTryCatch()).isTrue();
+        assertThat(ex.caughtTypes()).contains("IOException");
+    }
+
+    @Test
+    void classifyExceptionHandling_returns_none_when_call_outside_try() {
+        var d = new ConsumerDeriver(new AstSnippetExtractor());
+        var ex = d.classifyExceptionHandling(
+            consumerFixture("TryCatchConsumer.java"),
+            "consumerfix.TryCatchConsumer.unwrappedConsumer",
+            "target");
+        assertThat(ex.inTryCatch()).isFalse();
+    }
+
+    @Test
+    void classifyExceptionHandling_collects_multi_catch_types() {
+        var d = new ConsumerDeriver(new AstSnippetExtractor());
+        var ex = d.classifyExceptionHandling(
+            consumerFixture("TryCatchConsumer.java"),
+            "consumerfix.TryCatchConsumer.multiCatchConsumer",
+            "target");
+        assertThat(ex.inTryCatch()).isTrue();
+        assertThat(ex.caughtTypes()).contains("IOException", "IllegalStateException");
+    }
 }

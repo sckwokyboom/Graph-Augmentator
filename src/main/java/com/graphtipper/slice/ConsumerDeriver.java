@@ -138,6 +138,50 @@ public final class ConsumerDeriver {
         }
     }
 
+    /** Walk the consumer's method body, classify exception handling around the target call(s). */
+    public ExceptionHandlingNearCall classifyExceptionHandling(
+            java.nio.file.Path file, String consumerFqn, String targetSimpleName) {
+        Optional<MethodDeclaration> mdOpt = findMethod(file, consumerFqn);
+        if (mdOpt.isEmpty()) return ExceptionHandlingNearCall.none();
+        MethodDeclaration md = mdOpt.get();
+        List<String> caught = new ArrayList<>();
+        boolean inTry = false;
+        for (MethodCallExpr call : md.findAll(MethodCallExpr.class)) {
+            if (!call.getNameAsString().equals(targetSimpleName)) continue;
+            Optional<TryStmt> tryAncestor = call.findAncestor(TryStmt.class);
+            if (tryAncestor.isPresent()) {
+                // The call must be inside the *try block*, not in a catch/finally of an unrelated try.
+                TryStmt tryStmt = tryAncestor.get();
+                if (isDescendant(call, tryStmt.getTryBlock())) {
+                    inTry = true;
+                    for (CatchClause cc : tryStmt.getCatchClauses()) {
+                        String t = cc.getParameter().getType().asString();
+                        for (String simple : t.split("\\s*\\|\\s*")) {
+                            String s = simpleName(simple);
+                            if (!caught.contains(s)) caught.add(s);
+                        }
+                    }
+                }
+            }
+        }
+        return new ExceptionHandlingNearCall(inTry, caught);
+    }
+
+    private static boolean isDescendant(Node child, Node ancestor) {
+        Node cur = child;
+        while (cur != null) {
+            if (cur == ancestor) return true;
+            cur = cur.getParentNode().orElse(null);
+        }
+        return false;
+    }
+
+    private static String simpleName(String typeName) {
+        String t = typeName.trim();
+        int dot = t.lastIndexOf('.');
+        return dot < 0 ? t : t.substring(dot + 1);
+    }
+
     private Optional<MethodDeclaration> findMethod(Path file, String fqn) {
         try {
             CompilationUnit cu = StaticJavaParser.parse(file.toFile());
