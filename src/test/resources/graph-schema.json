@@ -1,9 +1,12 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "object",
-  "required": ["schema_version", "generated_for", "target", "vertices", "edges", "chains", "stats", "degradations"],
+  "required": [
+    "schema_version", "generated_for", "target", "method_bodies", "chains",
+    "local_context", "stats", "degradations"
+  ],
   "properties": {
-    "schema_version": { "type": "string", "const": "1" },
+    "schema_version": { "type": "string", "const": "2" },
     "generated_for": {
       "type": "object",
       "required": ["project", "commit_hash_proxy", "timestamp"],
@@ -15,9 +18,8 @@
     },
     "target": {
       "type": "object",
-      "required": ["id", "fqn", "file", "line_start", "line_end", "current_body"],
+      "required": ["fqn", "signature", "file", "line_start", "line_end", "current_body"],
       "properties": {
-        "id": { "type": "string", "const": "target" },
         "fqn": { "type": "string" },
         "signature": { "type": "string" },
         "file": { "type": "string" },
@@ -26,54 +28,21 @@
         "current_body": { "type": "string" }
       }
     },
-    "vertices": {
-      "type": "array",
-      "items": {
+    "method_bodies": {
+      "type": "object",
+      "description": "Sliced bodies of intermediate methods, keyed by FQN. Tests and target are NOT here — see chain.test and target.current_body.",
+      "additionalProperties": {
         "type": "object",
-        "required": ["id", "kind", "fqn", "file", "line", "snippet"],
+        "required": ["fqn", "signature", "file", "line_start", "line_end", "sliced_body"],
         "properties": {
-          "id": { "type": "string", "pattern": "^v_(test|method)_" },
-          "kind": { "enum": ["test_method", "intermediate_method"] },
           "fqn": { "type": "string" },
-          "file": { "type": "string" },
-          "line": { "type": "integer" },
-          "snippet": { "type": "string" },
-          "snippet_truncated": { "type": "boolean" },
+          "signature": { "type": "string" },
+          "file": { "type": ["string", "null"] },
+          "line_start": { "type": "integer" },
+          "line_end": { "type": "integer" },
+          "sliced_body": { "type": "string" },
+          "sliced_body_truncated": { "type": "boolean" },
           "warnings": { "type": "array", "items": { "type": "string" } }
-        }
-      }
-    },
-    "edges": {
-      "type": "array",
-      "items": {
-        "type": "object",
-        "required": ["id", "from", "to", "kind", "call_site", "args", "virtual"],
-        "properties": {
-          "id": { "type": "string", "pattern": "^e_\\d+$" },
-          "from": { "type": "string" },
-          "to": { "type": "string" },
-          "kind": { "type": "string", "const": "calls" },
-          "call_site": {
-            "type": "object",
-            "required": ["file", "line", "code"],
-            "properties": {
-              "file": { "type": ["string", "null"] },
-              "line": { "type": "integer" },
-              "code": { "type": "string" }
-            }
-          },
-          "args": {
-            "type": "array",
-            "items": {
-              "type": "object",
-              "required": ["index", "origin"],
-              "properties": {
-                "index": { "type": "integer" },
-                "origin": { "type": "string" }
-              }
-            }
-          },
-          "virtual": { "type": "boolean" }
         }
       }
     },
@@ -81,24 +50,79 @@
       "type": "array",
       "items": {
         "type": "object",
-        "required": ["id", "depth", "virtual_steps", "path", "edges"],
+        "required": ["id", "depth", "virtual_steps", "test", "steps"],
         "properties": {
           "id": { "type": "string", "pattern": "^chain_\\d+$" },
           "depth": { "type": "integer" },
           "virtual_steps": { "type": "integer" },
-          "path": { "type": "array", "items": { "type": "string" } },
-          "edges": { "type": "array", "items": { "type": "string" } }
+          "test": {
+            "type": "object",
+            "required": ["fqn", "file", "line", "sliced_body"],
+            "properties": {
+              "fqn": { "type": "string" },
+              "file": { "type": "string" },
+              "line": { "type": "integer" },
+              "sliced_body": { "type": "string" }
+            }
+          },
+          "steps": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["caller_ref", "callee_ref", "call_site", "args", "virtual"],
+              "properties": {
+                "caller_ref": {
+                  "type": "string",
+                  "description": "Either 'test' (body in chain.test.sliced_body), 'target' (body in target.current_body), or an FQN key in method_bodies."
+                },
+                "callee_ref": {
+                  "type": "string",
+                  "description": "Same resolution as caller_ref."
+                },
+                "call_site": {
+                  "type": "object",
+                  "required": ["file", "line", "column", "code"],
+                  "properties": {
+                    "file": { "type": ["string", "null"] },
+                    "line": { "type": "integer" },
+                    "column": { "type": "integer" },
+                    "code": { "type": "string" }
+                  }
+                },
+                "args": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "required": ["index", "origin"],
+                    "properties": {
+                      "index": { "type": "integer" },
+                      "origin": { "type": "string" }
+                    }
+                  }
+                },
+                "virtual": { "type": "boolean" }
+              }
+            }
+          }
         }
+      }
+    },
+    "local_context": {
+      "type": "object",
+      "required": ["siblings", "used_types", "production_call_sites"],
+      "properties": {
+        "siblings": { "type": "array" },
+        "used_types": { "type": "array" },
+        "production_call_sites": { "type": "array" }
       }
     },
     "stats": {
       "type": "object",
-      "required": ["total_chains", "distinct_tests", "vertices", "edges", "truncated"],
+      "required": ["total_chains", "distinct_tests", "distinct_method_bodies", "truncated"],
       "properties": {
         "total_chains": { "type": "integer" },
         "distinct_tests": { "type": "integer" },
-        "vertices": { "type": "integer" },
-        "edges": { "type": "integer" },
+        "distinct_method_bodies": { "type": "integer" },
         "truncated": { "type": "boolean" }
       }
     },
@@ -108,11 +132,7 @@
         "type": "object",
         "required": ["kind"],
         "properties": {
-          "kind": { "type": "string" },
-          "details": { "type": "string" },
-          "file": { "type": "string" },
-          "line": { "type": "integer" },
-          "effect": { "type": "string" }
+          "kind": { "type": "string" }
         }
       }
     }

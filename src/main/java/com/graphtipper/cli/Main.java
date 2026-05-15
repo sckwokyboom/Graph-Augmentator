@@ -78,13 +78,20 @@ public final class Main implements Callable<Integer> {
                 }
             }
 
-            // Full artifact: every chain, unbounded budget. Used for full.md and graph.json.
+            // Full artifact: every chain, unbounded budget. Used for full.md.
             var fullArtifact = new Artifact(targetMethod, currentBody, enriched, chainResult.truncated(), lc);
 
             // Budget artifact: top-maxChains chains, planned for token budget. Used for
             // budget.md and the legacy <hash>.json (which keeps its old contract).
             var topChains = enriched.subList(0, Math.min(maxChains, enriched.size()));
             var budgetArtifactInitial = new Artifact(targetMethod, currentBody, topChains,
+                    chainResult.truncated(), lc);
+
+            // Graph artifact: same top-maxChains as budget.md by default. graph.json is
+            // intended for LLM consumption; emitting every chain (often 1000s on real
+            // projects) produces multi-MB output no model can ingest. Users who want the
+            // exhaustive list pull it from full.md or re-run with a larger --max-chains.
+            var graphArtifact = new Artifact(targetMethod, currentBody, topChains,
                     chainResult.truncated(), lc);
             var budget = new TokenBudget(budgetTokens);
             Artifact budgetArtifact;
@@ -101,7 +108,7 @@ public final class Main implements Callable<Integer> {
             String projectName = project.getFileName().toString();
             String budgetMd = new MarkdownRenderer().render(budgetArtifact, budget, projectSrcHash, projectName);
             String fullMd = new MarkdownRenderer().render(fullArtifact, unlimitedBudget, projectSrcHash, projectName);
-            String graphJson = new GraphJsonRenderer().render(fullArtifact, projectSrcHash, projectName);
+            String graphJson = new GraphJsonRenderer().render(graphArtifact, g, projectSrcHash, projectName);
             String legacyJson = new JsonRenderer().render(budgetArtifact, budget);
 
             String hash = digest(target + "@" + projectSrcHash);

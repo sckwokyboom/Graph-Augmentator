@@ -34,8 +34,23 @@ public final class CallSiteSlicer {
         AstSnippetExtractor.SnippetAt snip = ast.sliceAt(file, cs.line(), cs.col(),
                 calleeSimple, MAX_SLICE_STMTS);
 
+        // Read the actual call-line from source so graph.json can carry the real call
+        // expression, not just the first line of the surrounding slice.
+        String callLineCode = readCallLine(caller.file(), cs.line());
+
         String rendered = String.join("\n", snip.renderedBody());
-        return step.withEnrichment(rendered, snip.argOrigins());
+        return step
+                .withEnrichment(rendered, snip.argOrigins())
+                .withCallSite(new CallStep.CallSite(caller.file(), cs.line(), cs.col(), callLineCode));
+    }
+
+    private String readCallLine(String relFile, int line) {
+        try {
+            String oneLine = reader.readLines(relFile, line, line);
+            return oneLine == null ? "" : oneLine.trim();
+        } catch (Exception e) {
+            return "";
+        }
     }
 
     private Node.CallSite findCallSite(ProjectGraph g, CallStep step) {
