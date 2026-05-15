@@ -2353,7 +2353,819 @@ git commit -m "feat(slice): ConsumerDeriver.classifyReturnValueUsage"
 
 ---
 
-> **Remaining tasks (17–37) continue below.** Each follows the same TDD template.
+## Task 17: `ConsumerDeriver` — exception handling classification
+
+**Files:**
+- Modify: `src/main/java/com/graphtipper/slice/ConsumerDeriver.java`
+- Create: `src/test/resources/consumer-fixtures/TryCatchConsumer.java`
+- Test: extend `ConsumerDeriverTest.java`
+
+- [ ] **Step 1: Create fixture**
+
+Create `src/test/resources/consumer-fixtures/TryCatchConsumer.java`:
+
+```java
+package consumerfix;
+
+import java.io.IOException;
+
+class TryCatchConsumer {
+    void target() throws IOException {}
+
+    void wrappedConsumer() {
+        try {
+            target();
+        } catch (IOException e) {
+            // swallow
+        }
+    }
+
+    void unwrappedConsumer() {
+        try {
+            unrelated();
+        } catch (RuntimeException e) {
+            // does NOT wrap target()
+        }
+        target();
+    }
+
+    void multiCatchConsumer() {
+        try {
+            target();
+        } catch (IOException | IllegalStateException e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    void unrelated() {}
+}
+```
+
+- [ ] **Step 2: Write the failing test**
+
+Append to `ConsumerDeriverTest.java`:
+
+```java
+    @Test
+    void classifyExceptionHandling_detects_try_catch_around_target() {
+        var d = new ConsumerDeriver(new AstSnippetExtractor());
+        var ex = d.classifyExceptionHandling(
+            consumerFixture("TryCatchConsumer.java"),
+            "consumerfix.TryCatchConsumer.wrappedConsumer",
+            "target");
+        assertThat(ex.inTryCatch()).isTrue();
+        assertThat(ex.caughtTypes()).contains("IOException");
+    }
+
+    @Test
+    void classifyExceptionHandling_returns_none_when_call_outside_try() {
+        var d = new ConsumerDeriver(new AstSnippetExtractor());
+        var ex = d.classifyExceptionHandling(
+            consumerFixture("TryCatchConsumer.java"),
+            "consumerfix.TryCatchConsumer.unwrappedConsumer",
+            "target");
+        assertThat(ex.inTryCatch()).isFalse();
+    }
+
+    @Test
+    void classifyExceptionHandling_collects_multi_catch_types() {
+        var d = new ConsumerDeriver(new AstSnippetExtractor());
+        var ex = d.classifyExceptionHandling(
+            consumerFixture("TryCatchConsumer.java"),
+            "consumerfix.TryCatchConsumer.multiCatchConsumer",
+            "target");
+        assertThat(ex.inTryCatch()).isTrue();
+        assertThat(ex.caughtTypes()).contains("IOException", "IllegalStateException");
+    }
+```
+
+- [ ] **Step 3: Run test to verify it fails**
+
+Run: `./gradlew test --tests com.graphtipper.slice.ConsumerDeriverTest -q`
+Expected: compile failure — `classifyExceptionHandling` missing.
+
+- [ ] **Step 4: Add method to `ConsumerDeriver`**
+
+Add to `ConsumerDeriver.java`:
+
+```java
+    /** Walk the consumer's method body, classify exception handling around the target call(s). */
+    public ExceptionHandlingNearCall classifyExceptionHandling(
+            java.nio.file.Path file, String consumerFqn, String targetSimpleName) {
+        var mdOpt = findMethod(file, consumerFqn);
+        if (mdOpt.isEmpty()) return ExceptionHandlingNearCall.none();
+        var md = mdOpt.get();
+        java.util.List<String> caught = new java.util.ArrayList<>();
+        boolean inTry = false;
+        for (MethodCallExpr call : md.findAll(MethodCallExpr.class)) {
+            if (!call.getNameAsString().equals(targetSimpleName)) continue;
+            var tryAncestor = call.findAncestor(TryStmt.class);
+            if (tryAncestor.isPresent()) {
+                // The call must be inside the *try block*, not in a catch/finally of an unrelated try.
+                var tryStmt = tryAncestor.get();
+                if (isDescendant(call, tryStmt.getTryBlock())) {
+                    inTry = true;
+                    for (CatchClause cc : tryStmt.getCatchClauses()) {
+                        String t = cc.getParameter().getType().asString();
+                        for (String simple : t.split("\\s*\\|\\s*")) {
+                            String s = simpleName(simple);
+                            if (!caught.contains(s)) caught.add(s);
+                        }
+                    }
+                }
+            }
+        }
+        return new ExceptionHandlingNearCall(inTry, caught);
+    }
+
+    private static boolean isDescendant(com.github.javaparser.ast.Node child,
+                                         com.github.javaparser.ast.Node ancestor) {
+        com.github.javaparser.ast.Node cur = child;
+        while (cur != null) {
+            if (cur == ancestor) return true;
+            cur = cur.getParentNode().orElse(null);
+        }
+        return false;
+    }
+
+    private static String simpleName(String typeName) {
+        String t = typeName.trim();
+        int dot = t.lastIndexOf('.');
+        return dot < 0 ? t : t.substring(dot + 1);
+    }
+```
+
+- [ ] **Step 5: Run test to verify it passes**
+
+Run: `./gradlew test --tests com.graphtipper.slice.ConsumerDeriverTest -q`
+Expected: all tests pass.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add src/main/java/com/graphtipper/slice/ConsumerDeriver.java \
+        src/test/resources/consumer-fixtures/TryCatchConsumer.java \
+        src/test/java/com/graphtipper/slice/ConsumerDeriverTest.java
+git commit -m "feat(slice): ConsumerDeriver.classifyExceptionHandling"
+```
+
+---
+
+## Task 18: `ConsumerDeriver.derive` — end-to-end assembly
+
+**Files:**
+- Modify: `src/main/java/com/graphtipper/slice/ConsumerDeriver.java`
+- Test: extend `ConsumerDeriverTest.java`
+
+- [ ] **Step 1: Write the failing test**
+
+Append to `ConsumerDeriverTest.java`:
+
+```java
+    @Test
+    void derive_assembles_consumer_contracts_grouped_by_consumer_fqn() {
+        // Two clusters that both funnel through consumer A; one through consumer B.
+        var sigA1 = new PathSignature(List.of("E1.entry", "consumerfix.MultiCallConsumer.useAssignAndFieldRead", "target"));
+        var sigA2 = new PathSignature(List.of("E2.entry", "consumerfix.MultiCallConsumer.useAssignAndFieldRead", "target"));
+        var sigB = new PathSignature(List.of("E3.entry", "consumerfix.MultiCallConsumer.useDiscarded", "target"));
+        var clusterA1 = new PathCluster(sigA1, "E1.entry", "consumerfix.MultiCallConsumer.useAssignAndFieldRead",
+                3, List.of(stubMember("Test.a")), List.of());
+        var clusterA2 = new PathCluster(sigA2, "E2.entry", "consumerfix.MultiCallConsumer.useAssignAndFieldRead",
+                3, List.of(stubMember("Test.b"), stubMember("Test.c")), List.of());
+        var clusterB = new PathCluster(sigB, "E3.entry", "consumerfix.MultiCallConsumer.useDiscarded",
+                3, List.of(stubMember("Test.d")), List.of());
+
+        var d = new ConsumerDeriver(new AstSnippetExtractor());
+        // Construct a mini fileMap that the deriver can use to look up consumer source.
+        var contracts = d.derive(List.of(clusterA1, clusterA2, clusterB), "target",
+                fqn -> {
+                    if (fqn.startsWith("consumerfix.MultiCallConsumer."))
+                        return consumerFixture("MultiCallConsumer.java");
+                    return null;
+                });
+
+        assertThat(contracts).hasSize(2);
+        var assignContract = contracts.stream()
+                .filter(c -> c.consumerFqn().endsWith("useAssignAndFieldRead"))
+                .findFirst().orElseThrow();
+        assertThat(assignContract.chainsCovered()).isEqualTo(3); // 1 + 2
+        assertThat(assignContract.clusters()).hasSize(2);
+        assertThat(assignContract.returnValueUsage().kinds()).contains(UsageKind.ASSIGNED_TO_LOCAL);
+        assertThat(assignContract.implications()).isNotEmpty();
+    }
+
+    private ClusterMember stubMember(String testFqn) {
+        var node = new com.graphtipper.model.Node.Method("m_" + testFqn, testFqn, "Test.java", 1, 1, null, "", "");
+        return new ClusterMember(node, List.of(), new Oracle.None());
+    }
+```
+
+- [ ] **Step 2: Run test to verify it fails**
+
+Run: `./gradlew test --tests com.graphtipper.slice.ConsumerDeriverTest -q`
+Expected: compile failure — `derive` doesn't exist.
+
+- [ ] **Step 3: Add `derive` to `ConsumerDeriver`**
+
+Add to `ConsumerDeriver.java`:
+
+```java
+    /** Source-file resolver: maps a consumer FQN to the .java file that defines it. */
+    @FunctionalInterface
+    public interface FileResolver {
+        java.nio.file.Path resolve(String consumerFqn);
+    }
+
+    /**
+     * Group clusters by their immediate consumer; for each consumer, build a
+     * {@link ConsumerContract} with body slice + usage classification + implications.
+     * Returns contracts sorted by total chains covered (desc).
+     */
+    public java.util.List<ConsumerContract> derive(
+            java.util.List<PathCluster> clusters, String targetSimpleName, FileResolver resolver) {
+        var byConsumer = new java.util.LinkedHashMap<String, java.util.List<PathCluster>>();
+        for (PathCluster c : clusters) {
+            byConsumer.computeIfAbsent(c.immediateConsumer(), k -> new java.util.ArrayList<>()).add(c);
+        }
+        var out = new java.util.ArrayList<ConsumerContract>();
+        for (var e : byConsumer.entrySet()) {
+            String consumerFqn = e.getKey();
+            java.util.List<PathCluster> consumerClusters = e.getValue();
+            int chainsCovered = consumerClusters.stream().mapToInt(PathCluster::chainsCovered).sum();
+            java.nio.file.Path file = resolver.resolve(consumerFqn);
+            String bodySlice = "(source unavailable)";
+            ReturnValueUsage usage = ReturnValueUsage.empty();
+            ExceptionHandlingNearCall exHandling = ExceptionHandlingNearCall.none();
+            int line = -1;
+            String fileStr = "";
+            if (file != null) {
+                bodySlice = nullSafe(snippetExtractor.sliceConsumerBody(file, consumerFqn, targetSimpleName));
+                usage = classifyReturnValueUsage(file, consumerFqn, targetSimpleName);
+                exHandling = classifyExceptionHandling(file, consumerFqn, targetSimpleName);
+                fileStr = file.toString();
+                line = locateLine(file, consumerFqn);
+            }
+            var implications = ImpliedRequirementTemplates.derive(usage, exHandling);
+            out.add(new ConsumerContract(consumerFqn, fileStr, line, bodySlice, usage, exHandling,
+                    implications, consumerClusters, chainsCovered));
+        }
+        out.sort((a, b) -> Integer.compare(b.chainsCovered(), a.chainsCovered()));
+        return out;
+    }
+
+    private static String nullSafe(String s) { return s == null ? "(unavailable)" : s; }
+
+    private int locateLine(java.nio.file.Path file, String fqn) {
+        var mdOpt = findMethod(file, fqn);
+        if (mdOpt.isEmpty()) return -1;
+        return mdOpt.get().getBegin().map(p -> p.line).orElse(-1);
+    }
+```
+
+- [ ] **Step 4: Run test to verify it passes**
+
+Run: `./gradlew test --tests com.graphtipper.slice.ConsumerDeriverTest -q`
+Expected: all tests pass.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add src/main/java/com/graphtipper/slice/ConsumerDeriver.java \
+        src/test/java/com/graphtipper/slice/ConsumerDeriverTest.java
+git commit -m "feat(slice): ConsumerDeriver.derive assembles ConsumerContracts from clusters"
+```
+
+---
+
+## Task 19: `ClusterEnricher` — populate `ClusterMember.argsAtTarget` and `oracle`
+
+**Files:**
+- Create: `src/main/java/com/graphtipper/slice/ClusterEnricher.java`
+- Test: `src/test/java/com/graphtipper/slice/ClusterEnricherTest.java`
+
+- [ ] **Step 1: Write the failing test**
+
+Create `src/test/java/com/graphtipper/slice/ClusterEnricherTest.java`:
+
+```java
+package com.graphtipper.slice;
+
+import org.junit.jupiter.api.Test;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.util.List;
+import static org.assertj.core.api.Assertions.assertThat;
+
+class ClusterEnricherTest {
+
+    private static com.graphtipper.model.Node.Method testMethod(String fqn) {
+        return new com.graphtipper.model.Node.Method("m_" + fqn, fqn,
+                "src/test/resources/oracle-fixtures/AssertEqualsTests.java",
+                10, 20, null, "", "");
+    }
+
+    @Test
+    void enrich_attaches_oracle_extracted_from_test_method_source() {
+        var sig = new PathSignature(List.of("E.entry", "C.consumer", "target"));
+        var stubMember = new ClusterMember(
+                testMethod("oraclefix.AssertEqualsTests.testReturnEquals"),
+                List.of(), new Oracle.None());
+        var cluster = new PathCluster(sig, "E.entry", "C.consumer", 3, List.of(stubMember), List.of());
+
+        var enricher = new ClusterEnricher(new OracleExtractor());
+        var enriched = enricher.enrich(List.of(cluster),
+                fqn -> Paths.get("src/test/resources/oracle-fixtures/AssertEqualsTests.java"),
+                java.util.Map.of());
+
+        assertThat(enriched).hasSize(1);
+        var member = enriched.get(0).members().get(0);
+        assertThat(member.oracle()).isInstanceOf(Oracle.Equals.class);
+    }
+
+    @Test
+    void enrich_attaches_argsAtTarget_from_supplied_chain_map() {
+        var sig = new PathSignature(List.of("E.entry", "C.consumer", "target"));
+        var stubMember = new ClusterMember(
+                testMethod("oraclefix.AssertEqualsTests.testReturnEquals"),
+                List.of(), new Oracle.None());
+        var cluster = new PathCluster(sig, "E.entry", "C.consumer", 3, List.of(stubMember), List.of());
+
+        var args = List.of(
+                ArgOrigin.literal(0, "0", "F.java", 1),
+                ArgOrigin.literal(1, "0", "F.java", 1));
+        var chainArgsMap = java.util.Map.of(
+                "oraclefix.AssertEqualsTests.testReturnEquals", (List<ArgOrigin>) args);
+
+        var enricher = new ClusterEnricher(new OracleExtractor());
+        var enriched = enricher.enrich(List.of(cluster),
+                fqn -> Paths.get("src/test/resources/oracle-fixtures/AssertEqualsTests.java"),
+                chainArgsMap);
+
+        assertThat(enriched.get(0).members().get(0).argsAtTarget()).hasSize(2);
+    }
+}
+```
+
+(If `ArgOrigin.literal` static factory does not exist, adjust to use the canonical constructor with all fields, matching whatever the actual `ArgOrigin.java` exposes.)
+
+- [ ] **Step 2: Run test to verify it fails**
+
+Run: `./gradlew test --tests com.graphtipper.slice.ClusterEnricherTest -q`
+Expected: compile failure — `ClusterEnricher` not found.
+
+- [ ] **Step 3: Write minimal implementation**
+
+Create `src/main/java/com/graphtipper/slice/ClusterEnricher.java`:
+
+```java
+package com.graphtipper.slice;
+
+import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
+
+/**
+ * Populates {@link ClusterMember#argsAtTarget()} and {@link ClusterMember#oracle()}
+ * for each member of each cluster. Inputs:
+ *  - {@code resolver}: maps a test FQN to its .java file path.
+ *  - {@code chainArgsMap}: a precomputed map from test FQN → args reaching target on that chain.
+ *    (Populated from the chain's last {@code CallStep.argOrigins} in the pipeline orchestration.)
+ */
+public final class ClusterEnricher {
+
+    private final OracleExtractor oracleExtractor;
+
+    public ClusterEnricher(OracleExtractor oracleExtractor) {
+        this.oracleExtractor = oracleExtractor;
+    }
+
+    @FunctionalInterface
+    public interface TestFileResolver {
+        Path resolve(String testFqn);
+    }
+
+    public List<PathCluster> enrich(List<PathCluster> clusters,
+                                     TestFileResolver resolver,
+                                     Map<String, List<ArgOrigin>> chainArgsMap) {
+        var out = new ArrayList<PathCluster>(clusters.size());
+        for (PathCluster c : clusters) {
+            var enrichedMembers = new ArrayList<ClusterMember>(c.members().size());
+            for (ClusterMember m : c.members()) {
+                String testFqn = m.testMethod().fqn();
+                Path file = resolver.resolve(testFqn);
+                Oracle oracle = file == null
+                        ? new Oracle.None()
+                        : oracleExtractor.primaryFor(file, testFqn, /*targetFqn*/ "");
+                List<ArgOrigin> args = chainArgsMap.getOrDefault(testFqn, m.argsAtTarget());
+                enrichedMembers.add(new ClusterMember(m.testMethod(), args, oracle));
+            }
+            out.add(c.withMembers(enrichedMembers));
+        }
+        return out;
+    }
+}
+```
+
+- [ ] **Step 4: Run test to verify it passes**
+
+Run: `./gradlew test --tests com.graphtipper.slice.ClusterEnricherTest -q`
+Expected: all tests pass.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add src/main/java/com/graphtipper/slice/ClusterEnricher.java \
+        src/test/java/com/graphtipper/slice/ClusterEnricherTest.java
+git commit -m "feat(slice): ClusterEnricher populates argsAtTarget + oracle per member"
+```
+
+---
+
+## Task 20: `DifferentialAnalyzer` — `argN_invariant_in_cluster` detector
+
+**Files:**
+- Create: `src/main/java/com/graphtipper/slice/DifferentialAnalyzer.java`
+- Test: `src/test/java/com/graphtipper/slice/DifferentialAnalyzerTest.java`
+
+- [ ] **Step 1: Write the failing test**
+
+Create `src/test/java/com/graphtipper/slice/DifferentialAnalyzerTest.java`:
+
+```java
+package com.graphtipper.slice;
+
+import com.graphtipper.render.ArgRenderer;
+import org.junit.jupiter.api.Test;
+import java.util.List;
+import static org.assertj.core.api.Assertions.assertThat;
+
+class DifferentialAnalyzerTest {
+
+    private static com.graphtipper.model.Node.Method m(String fqn) {
+        return new com.graphtipper.model.Node.Method("m_" + fqn, fqn, "T.java", 1, 1, null, "", "");
+    }
+    private static ClusterMember member(String testFqn, List<ArgOrigin> args, Oracle oracle) {
+        return new ClusterMember(m(testFqn), args, oracle);
+    }
+    private static ArgOrigin lit(int idx, String val) {
+        return ArgOrigin.literal(idx, val, "F.java", 1);
+    }
+
+    @Test
+    void emits_argN_invariant_when_all_members_share_argN() {
+        var sig = new PathSignature(List.of("E", "C", "target"));
+        var members = List.of(
+            member("T1", List.of(lit(0, "0"), lit(1, "\"a\"")), new Oracle.Equals("\"x\"", "r")),
+            member("T2", List.of(lit(0, "0"), lit(1, "\"b\"")), new Oracle.Equals("\"y\"", "r")));
+        var cluster = new PathCluster(sig, "E", "C", 3, members, List.of());
+
+        var signals = new DifferentialAnalyzer(new ArgRenderer()).analyze(cluster);
+        assertThat(signals).extracting(BehaviorSignal::tag).contains("arg0_invariant_in_cluster");
+        assertThat(signals).extracting(BehaviorSignal::tag).doesNotContain("arg1_invariant_in_cluster");
+    }
+
+    @Test
+    void no_signal_when_cluster_has_one_member() {
+        var sig = new PathSignature(List.of("E", "C", "target"));
+        var members = List.of(member("T1", List.of(lit(0, "0")), new Oracle.None()));
+        var cluster = new PathCluster(sig, "E", "C", 3, members, List.of());
+        var signals = new DifferentialAnalyzer(new ArgRenderer()).analyze(cluster);
+        assertThat(signals).isEmpty();
+    }
+}
+```
+
+- [ ] **Step 2: Run test to verify it fails**
+
+Run: `./gradlew test --tests com.graphtipper.slice.DifferentialAnalyzerTest -q`
+Expected: compile failure — `DifferentialAnalyzer` not found.
+
+- [ ] **Step 3: Write minimal implementation**
+
+Create `src/main/java/com/graphtipper/slice/DifferentialAnalyzer.java`:
+
+```java
+package com.graphtipper.slice;
+
+import com.graphtipper.render.ArgRenderer;
+import java.util.ArrayList;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Set;
+
+/**
+ * Derives deterministic {@link BehaviorSignal}s from a {@link PathCluster}'s members.
+ * V1 detectors (added across Tasks 20-22):
+ *  - {@code argN_invariant_in_cluster}: argN identical across all members
+ *  - {@code argN_propagates_to_oracle}: argN's literal substring appears in oracle text
+ *  - {@code oracle_varies_only_with_argN}: exactly one arg varies, oracle varies in lockstep
+ *  - {@code oracle_independent_of_target_args}: args vary, oracle constant
+ *  - {@code exception_type_consistent_across_cluster}: all oracles same Exception type
+ */
+public final class DifferentialAnalyzer {
+
+    private final ArgRenderer argRenderer;
+
+    public DifferentialAnalyzer(ArgRenderer argRenderer) {
+        this.argRenderer = argRenderer;
+    }
+
+    public List<BehaviorSignal> analyze(PathCluster cluster) {
+        var out = new ArrayList<BehaviorSignal>();
+        if (cluster.members().size() < 2) return out;
+        int argCount = maxArgCount(cluster.members());
+        for (int i = 0; i < argCount; i++) {
+            if (isInvariantAt(cluster.members(), i)) {
+                out.add(new BehaviorSignal(
+                        "arg" + i + "_invariant_in_cluster",
+                        "All " + cluster.members().size() + " members share arg" + i));
+            }
+        }
+        return out;
+    }
+
+    private int maxArgCount(List<ClusterMember> members) {
+        int max = 0;
+        for (var m : members) max = Math.max(max, m.argsAtTarget().size());
+        return max;
+    }
+
+    private boolean isInvariantAt(List<ClusterMember> members, int idx) {
+        Set<String> rendered = new HashSet<>();
+        for (var m : members) {
+            if (idx >= m.argsAtTarget().size()) return false;
+            rendered.add(argRenderer.render(m.argsAtTarget().get(idx)));
+            if (rendered.size() > 1) return false;
+        }
+        return rendered.size() == 1;
+    }
+}
+```
+
+- [ ] **Step 4: Run test to verify it passes**
+
+Run: `./gradlew test --tests com.graphtipper.slice.DifferentialAnalyzerTest -q`
+Expected: all tests pass.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add src/main/java/com/graphtipper/slice/DifferentialAnalyzer.java \
+        src/test/java/com/graphtipper/slice/DifferentialAnalyzerTest.java
+git commit -m "feat(slice): DifferentialAnalyzer detects argN_invariant_in_cluster"
+```
+
+---
+
+## Task 21: `DifferentialAnalyzer` — `argN_propagates_to_oracle` detector
+
+**Files:**
+- Modify: `src/main/java/com/graphtipper/slice/DifferentialAnalyzer.java`
+- Test: extend `DifferentialAnalyzerTest.java`
+
+- [ ] **Step 1: Write the failing test**
+
+Append to `DifferentialAnalyzerTest.java`:
+
+```java
+    @Test
+    void emits_argN_propagates_to_oracle_when_arg_text_appears_in_oracle() {
+        var sig = new PathSignature(List.of("E", "C", "target"));
+        var members = List.of(
+            member("T1", List.of(lit(0, "0"), lit(1, "\"hello world\"")),
+                new Oracle.ExceptionMessage("X", Oracle.MatchKind.CONTAINS, "hello world")),
+            member("T2", List.of(lit(0, "0"), lit(1, "\"goodbye now\"")),
+                new Oracle.ExceptionMessage("X", Oracle.MatchKind.CONTAINS, "goodbye now")));
+        var cluster = new PathCluster(sig, "E", "C", 3, members, List.of());
+        var signals = new DifferentialAnalyzer(new ArgRenderer()).analyze(cluster);
+        assertThat(signals).extracting(BehaviorSignal::tag).contains("arg1_propagates_to_oracle");
+    }
+
+    @Test
+    void does_not_emit_propagation_for_short_substrings() {
+        // arg = "0" is 1 char — below the min-length 3 threshold.
+        var sig = new PathSignature(List.of("E", "C", "target"));
+        var members = List.of(
+            member("T1", List.of(lit(0, "\"0\"")), new Oracle.ExceptionMessage("X", Oracle.MatchKind.CONTAINS, "code 0")),
+            member("T2", List.of(lit(0, "\"1\"")), new Oracle.ExceptionMessage("X", Oracle.MatchKind.CONTAINS, "code 1")));
+        var cluster = new PathCluster(sig, "E", "C", 3, members, List.of());
+        var signals = new DifferentialAnalyzer(new ArgRenderer()).analyze(cluster);
+        assertThat(signals).extracting(BehaviorSignal::tag).doesNotContain("arg0_propagates_to_oracle");
+    }
+```
+
+- [ ] **Step 2: Run test to verify it fails**
+
+Run: `./gradlew test --tests com.graphtipper.slice.DifferentialAnalyzerTest -q`
+Expected: 2 new tests fail.
+
+- [ ] **Step 3: Extend implementation**
+
+In `DifferentialAnalyzer.java`, in the `analyze` method, after the invariant loop, insert:
+
+```java
+        for (int i = 0; i < argCount; i++) {
+            if (isInvariantAt(cluster.members(), i)) continue; // varying args only
+            if (propagatesToOracle(cluster.members(), i)) {
+                out.add(new BehaviorSignal(
+                        "arg" + i + "_propagates_to_oracle",
+                        "Substring of arg" + i + " appears in oracle text for ≥2 distinct values"));
+            }
+        }
+```
+
+Add the detector method:
+
+```java
+    private boolean propagatesToOracle(List<ClusterMember> members, int idx) {
+        int matches = 0;
+        Set<String> distinctValues = new HashSet<>();
+        for (var m : members) {
+            if (idx >= m.argsAtTarget().size()) continue;
+            var origin = m.argsAtTarget().get(idx);
+            String val = origin.value();  // literal value, unquoted-ish — for string literals JavaParser may include the quotes
+            if (val == null) continue;
+            String unquoted = stripQuotes(val);
+            if (unquoted.length() < 3) continue;  // min length threshold
+            String oracleText = oracleText(m.oracle());
+            if (oracleText == null) continue;
+            if (oracleText.contains(unquoted)) {
+                matches++;
+                distinctValues.add(unquoted);
+            }
+        }
+        return matches >= 2 && distinctValues.size() >= 2;
+    }
+
+    private static String stripQuotes(String s) {
+        if (s.length() >= 2 && s.charAt(0) == '"' && s.charAt(s.length() - 1) == '"') {
+            return s.substring(1, s.length() - 1);
+        }
+        return s;
+    }
+
+    private static String oracleText(Oracle o) {
+        return switch (o) {
+            case Oracle.ExceptionMessage em -> em.message();
+            case Oracle.Equals eq -> eq.expected();
+            case Oracle.Contains co -> co.substring();
+            case Oracle.Exception ex -> ex.type();
+            case Oracle.Boolean __ -> null;
+            case Oracle.Nullability __ -> null;
+            case Oracle.None __ -> null;
+        };
+    }
+```
+
+- [ ] **Step 4: Run test to verify it passes**
+
+Run: `./gradlew test --tests com.graphtipper.slice.DifferentialAnalyzerTest -q`
+Expected: all tests pass.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add src/main/java/com/graphtipper/slice/DifferentialAnalyzer.java \
+        src/test/java/com/graphtipper/slice/DifferentialAnalyzerTest.java
+git commit -m "feat(slice): DifferentialAnalyzer detects argN_propagates_to_oracle"
+```
+
+---
+
+## Task 22: `DifferentialAnalyzer` — remaining detectors
+
+**Files:**
+- Modify: `src/main/java/com/graphtipper/slice/DifferentialAnalyzer.java`
+- Test: extend `DifferentialAnalyzerTest.java`
+
+- [ ] **Step 1: Write the failing test**
+
+Append to `DifferentialAnalyzerTest.java`:
+
+```java
+    @Test
+    void emits_oracle_independent_when_args_vary_oracle_constant() {
+        var sig = new PathSignature(List.of("E", "C", "target"));
+        var members = List.of(
+            member("T1", List.of(lit(0, "1")), new Oracle.Exception("X")),
+            member("T2", List.of(lit(0, "2")), new Oracle.Exception("X")));
+        var cluster = new PathCluster(sig, "E", "C", 3, members, List.of());
+        var signals = new DifferentialAnalyzer(new ArgRenderer()).analyze(cluster);
+        assertThat(signals).extracting(BehaviorSignal::tag).contains("oracle_independent_of_target_args");
+    }
+
+    @Test
+    void emits_exception_type_consistent_when_all_oracles_same_exception() {
+        var sig = new PathSignature(List.of("E", "C", "target"));
+        var members = List.of(
+            member("T1", List.of(lit(0, "1")), new Oracle.Exception("IAE")),
+            member("T2", List.of(lit(0, "2")), new Oracle.Exception("IAE")));
+        var cluster = new PathCluster(sig, "E", "C", 3, members, List.of());
+        var signals = new DifferentialAnalyzer(new ArgRenderer()).analyze(cluster);
+        assertThat(signals).extracting(BehaviorSignal::tag).contains("exception_type_consistent_across_cluster");
+    }
+
+    @Test
+    void emits_oracle_varies_only_with_argN_when_single_arg_varies_alongside_oracle() {
+        var sig = new PathSignature(List.of("E", "C", "target"));
+        var members = List.of(
+            member("T1", List.of(lit(0, "1"), lit(1, "\"a\"")), new Oracle.Equals("\"x\"", "r")),
+            member("T2", List.of(lit(0, "1"), lit(1, "\"b\"")), new Oracle.Equals("\"y\"", "r")));
+        var cluster = new PathCluster(sig, "E", "C", 3, members, List.of());
+        var signals = new DifferentialAnalyzer(new ArgRenderer()).analyze(cluster);
+        assertThat(signals).extracting(BehaviorSignal::tag).contains("oracle_varies_only_with_arg1");
+    }
+```
+
+- [ ] **Step 2: Run test to verify it fails**
+
+Run: `./gradlew test --tests com.graphtipper.slice.DifferentialAnalyzerTest -q`
+Expected: 3 new tests fail.
+
+- [ ] **Step 3: Extend implementation**
+
+In `DifferentialAnalyzer.java`, append to `analyze` (after existing detectors):
+
+```java
+        if (cluster.members().size() >= 2) {
+            // exception_type_consistent_across_cluster
+            String singleType = singleExceptionType(cluster.members());
+            if (singleType != null) {
+                out.add(new BehaviorSignal(
+                        "exception_type_consistent_across_cluster",
+                        "All " + cluster.members().size() + " members throw " + singleType));
+            }
+            // oracle_independent / oracle_varies_only_with_argN
+            boolean oracleVaries = oracleVaries(cluster.members());
+            boolean anyArgVaries = false;
+            int varyingArgs = 0;
+            int singleVaryingIdx = -1;
+            for (int i = 0; i < argCount; i++) {
+                if (!isInvariantAt(cluster.members(), i)) {
+                    anyArgVaries = true;
+                    varyingArgs++;
+                    singleVaryingIdx = i;
+                }
+            }
+            if (!oracleVaries && anyArgVaries) {
+                out.add(new BehaviorSignal(
+                        "oracle_independent_of_target_args",
+                        "Args vary across cluster but oracle is constant"));
+            }
+            if (oracleVaries && varyingArgs == 1) {
+                out.add(new BehaviorSignal(
+                        "oracle_varies_only_with_arg" + singleVaryingIdx,
+                        "Only arg" + singleVaryingIdx + " varies; oracle varies in lockstep"));
+            }
+        }
+```
+
+Add detector methods:
+
+```java
+    private String singleExceptionType(List<ClusterMember> members) {
+        String type = null;
+        for (var m : members) {
+            String t = switch (m.oracle()) {
+                case Oracle.Exception e -> e.type();
+                case Oracle.ExceptionMessage em -> em.type();
+                default -> null;
+            };
+            if (t == null) return null;
+            if (type == null) type = t;
+            else if (!type.equals(t)) return null;
+        }
+        return type;
+    }
+
+    private boolean oracleVaries(List<ClusterMember> members) {
+        Set<String> distinct = new HashSet<>();
+        for (var m : members) {
+            String text = oracleText(m.oracle());
+            distinct.add(text == null ? "<null>" : text);
+            if (distinct.size() > 1) return true;
+        }
+        return false;
+    }
+```
+
+- [ ] **Step 4: Run test to verify it passes**
+
+Run: `./gradlew test --tests com.graphtipper.slice.DifferentialAnalyzerTest -q`
+Expected: all tests pass.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add src/main/java/com/graphtipper/slice/DifferentialAnalyzer.java \
+        src/test/java/com/graphtipper/slice/DifferentialAnalyzerTest.java
+git commit -m "feat(slice): DifferentialAnalyzer detects oracle_independent/varies/exception_consistent"
+```
+
+---
+
+> **Remaining tasks (23–37) continue below.** Each follows the same TDD template.
 
 ---
 
