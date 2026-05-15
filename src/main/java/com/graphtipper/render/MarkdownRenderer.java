@@ -215,7 +215,11 @@ public final class MarkdownRenderer {
         }
         sb.append("\n");
 
-        // Path clusters rendered in Task 28.
+        // Path clusters
+        int ci = 1;
+        for (var cluster : c.clusters()) {
+            renderPathCluster(sb, cluster, n, ci++);
+        }
     }
 
     private static String humanizeKind(com.graphtipper.slice.UsageKind k) {
@@ -231,6 +235,78 @@ public final class MarkdownRenderer {
             case RETURNED_UNCHANGED -> "Returned unchanged by caller";
             case DISCARDED -> "Discarded (no LHS, no dotted access)";
         };
+    }
+
+    private void renderPathCluster(StringBuilder sb, com.graphtipper.slice.PathCluster cluster,
+                                    int consumerNum, int clusterNum) {
+        String clusterAnchor = "4.4." + consumerNum + "." + (char) ('a' + clusterNum - 1);
+        String entrySimple = simpleMethodName(cluster.entryPoint());
+        sb.append("#### ").append(clusterAnchor)
+          .append(" Cluster: ").append(entrySimple).append(" path (")
+          .append(cluster.chainsCovered()).append(" chains)\n\n");
+        sb.append("**Entry-point:** `").append(cluster.entryPoint()).append("`\n");
+        sb.append("**Path:** ").append(renderPathSignature(cluster.signature())).append("\n");
+        sb.append("**Depth:** ").append(cluster.depth()).append("\n\n");
+
+        if (cluster.members().isEmpty()) {
+            sb.append("_(no member tests resolved)_\n\n");
+            return;
+        }
+
+        // Primary representative = first member.
+        var primary = cluster.members().get(0);
+        sb.append("**Primary representative:** `").append(primary.testMethod().fqn())
+          .append("` — `").append(primary.testMethod().file()).append(":")
+          .append(primary.testMethod().lineStart()).append("`\n\n");
+
+        // Differential matrix — up to 5 rows.
+        sb.append("**Differential matrix (").append(Math.min(cluster.members().size(), 5))
+          .append(" representatives of ").append(cluster.members().size()).append("):**\n\n");
+        sb.append("| Test | Args at target | Oracle |\n");
+        sb.append("|---|---|---|\n");
+        var argRenderer = new ArgRenderer();
+        int rows = Math.min(cluster.members().size(), 5);
+        for (int i = 0; i < rows; i++) {
+            var m = cluster.members().get(i);
+            sb.append("| `").append(m.testMethod().fqn()).append("` | ")
+              .append(escapePipes(argRenderer.renderTuple(m.argsAtTarget()))).append(" | ")
+              .append(escapePipes(renderOracle(m.oracle()))).append(" |\n");
+        }
+        if (cluster.members().size() > 5) {
+            sb.append("\n**+ ").append(cluster.members().size() - 5)
+              .append(" more tests with similar profile** (see JSON sidecar)\n");
+        }
+        sb.append("\n");
+    }
+
+    private static String renderPathSignature(com.graphtipper.slice.PathSignature sig) {
+        // Compress consecutive identical simple-method-names: parse, parse, parse → parse(×3)
+        var simples = sig.fqns().stream().map(MarkdownRenderer::simpleMethodName).toList();
+        var out = new StringBuilder();
+        int i = 0;
+        while (i < simples.size()) {
+            int j = i;
+            while (j + 1 < simples.size() && simples.get(j + 1).equals(simples.get(i))) j++;
+            int count = j - i + 1;
+            if (count > 1) out.append(simples.get(i)).append("(×").append(count).append(")");
+            else out.append(simples.get(i));
+            if (j + 1 < simples.size()) out.append(" → ");
+            i = j + 1;
+        }
+        return out.toString();
+    }
+
+    private static String simpleMethodName(String fqn) {
+        if (fqn == null) return "?";
+        int lastDot = fqn.lastIndexOf('.');
+        if (lastDot < 0) return fqn;
+        String simple = fqn.substring(lastDot + 1);
+        // include enclosing simple class for clarity: ClassName.method
+        int prevDot = fqn.lastIndexOf('.', lastDot - 1);
+        int prevDollar = fqn.lastIndexOf('$', lastDot - 1);
+        int prev = Math.max(prevDot, prevDollar);
+        // If no previous separator: fqn is already "ClassName.method" — return as-is
+        return prev < 0 ? fqn : fqn.substring(prev + 1, lastDot) + "." + simple;
     }
 
     private static String escapePipes(String s) { return s.replace("|", "\\|"); }

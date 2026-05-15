@@ -97,6 +97,55 @@ class MarkdownRendererTest {
     }
 
     @Test
+    void path_cluster_renders_with_differential_matrix() {
+        var target = new com.graphtipper.model.Node.Method(
+                "m_t", "T.target", "T.target", java.util.List.of(), "void",
+                "T.java", 1, 5, null, false, false, java.util.List.of());
+        var test1 = new com.graphtipper.model.Node.Method(
+                "m1", "ArgGroupTest.testRequired", "ArgGroupTest.testRequired",
+                java.util.List.of(), "void", "ArgGroupTest.java", 142, 150, null, true, false, java.util.List.of());
+        var test2 = new com.graphtipper.model.Node.Method(
+                "m2", "ArgGroupTest.testMutex", "ArgGroupTest.testMutex",
+                java.util.List.of(), "void", "ArgGroupTest.java", 200, 210, null, true, false, java.util.List.of());
+        var args1 = java.util.List.of(
+                com.graphtipper.slice.ArgOrigin.literal(0, "0", "F.java", 1),
+                com.graphtipper.slice.ArgOrigin.literal(1, "0", "F.java", 1));
+        var args2 = java.util.List.of(
+                com.graphtipper.slice.ArgOrigin.literal(0, "0", "F.java", 1),
+                com.graphtipper.slice.ArgOrigin.literal(1, "1", "F.java", 1));
+        var members = java.util.List.of(
+                new com.graphtipper.slice.ClusterMember(test1, args1,
+                        new com.graphtipper.slice.Oracle.ExceptionMessage(
+                                "MPE", com.graphtipper.slice.Oracle.MatchKind.CONTAINS, "[-a -b]")),
+                new com.graphtipper.slice.ClusterMember(test2, args2,
+                        new com.graphtipper.slice.Oracle.ExceptionMessage(
+                                "MEAE", com.graphtipper.slice.Oracle.MatchKind.CONTAINS, "(-x | -y)")));
+        var sig = new com.graphtipper.slice.PathSignature(java.util.List.of(
+                "CommandLine.parseArgs", "CommandLine.parse", "CommandLine.parse",
+                "TextTable.addRowValues", "putValue"));
+        var cluster = new com.graphtipper.slice.PathCluster(
+                sig, "CommandLine.parseArgs", "TextTable.addRowValues", 5, members, java.util.List.of());
+        var consumer = new com.graphtipper.slice.ConsumerContract(
+                "TextTable.addRowValues", "F.java", 17234, "void addRowValues(){}",
+                com.graphtipper.slice.ReturnValueUsage.empty(),
+                com.graphtipper.slice.ExceptionHandlingNearCall.none(),
+                java.util.List.of(), java.util.List.of(cluster), 2);
+        var artifact = new Artifact(target, "", java.util.List.of(), java.util.List.of(),
+                java.util.List.of(consumer), java.util.List.of(), false,
+                new com.graphtipper.slice.LocalContext(java.util.List.of(), java.util.List.of()));
+        var budget = new com.graphtipper.util.TokenBudget(20000); budget.charge(100);
+        String md = new MarkdownRenderer().render(artifact, budget, "abc", "proj");
+        assertThat(md).contains("Cluster: CommandLine.parseArgs path");
+        assertThat(md).contains("Depth:** 5");
+        // Path renders with method-name compression: two consecutive "parse" → "parse(×2)"
+        assertThat(md).contains("parse(×2)");
+        assertThat(md).contains("ArgGroupTest.testRequired");
+        // Differential matrix
+        assertThat(md).contains("Differential matrix");
+        assertThat(md).contains("[-a -b]");
+    }
+
+    @Test
     void consumer_block_renders_body_slice_usage_and_implications() {
         var target = new com.graphtipper.model.Node.Method(
                 "m_t", "T.target", "T.target", java.util.List.of(), "void",
