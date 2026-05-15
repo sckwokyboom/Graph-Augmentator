@@ -4,6 +4,9 @@ import com.graphtipper.slice.*;
 import com.graphtipper.util.TokenBudget;
 import com.graphtipper.model.Node;
 
+import java.util.HashMap;
+import java.util.Map;
+
 public final class MarkdownRenderer {
 
     public String render(Artifact a, TokenBudget budget, String projectKey, String projectName) {
@@ -42,13 +45,36 @@ public final class MarkdownRenderer {
             sb.append("> No tests transitively reach this target.\n\n");
             return;
         }
-        int idx = 1;
+
+        // Convergent-chain dedup: most large projects have several chains that funnel
+        // through the same intermediate methods (e.g. picocli's 13 test paths all end in
+        // addRowValues → putValue). Without dedup the same caller-body snippet and
+        // arg-origins block repeat per chain, wasting context and burying signal.
+        // Strategy: key each step by (callerFqn → calleeFqn → snippet-hash). The first
+        // chain that emits a given key gets the full render; later chains get a one-line
+        // back-reference. The key includes the snippet so distinct call sites between the
+        // same pair (different line/different dataflow) still render fully.
+        Map<String, Integer> stepFirstSeenInChain = new HashMap<>();
+        int chainNumber = 0;
+
         for (Chain c : a.chains()) {
-            sb.append("### Chain ").append(idx++).append(" (depth=").append(c.depth())
+            chainNumber++;
+            sb.append("### Chain ").append(chainNumber).append(" (depth=").append(c.depth())
               .append(", virtual=").append(c.virtualSteps()).append(")\n");
             sb.append("**Test:** `").append(c.test().fqn()).append("` — `")
               .append(c.test().file()).append(":").append(c.test().lineStart()).append("`\n\n");
             for (CallStep s : c.steps()) {
+                String key = stepKey(s);
+                Integer firstSeen = stepFirstSeenInChain.get(key);
+                if (firstSeen != null) {
+                    // Already shown in full. Emit a short back-reference so the chain
+                    // remains traceable but doesn't repeat content.
+                    sb.append("> _`").append(s.callerFqn()).append("` → `")
+                      .append(s.calleeFqn()).append("` — same as Chain ")
+                      .append(firstSeen).append("_\n\n");
+                    continue;
+                }
+                stepFirstSeenInChain.put(key, chainNumber);
                 sb.append("```java\n// ").append(s.callerFqn()).append("\n");
                 sb.append(s.snippet() == null ? "(snippet unavailable)" : s.snippet()).append("\n```\n");
                 if (!s.argOrigins().isEmpty()) {
@@ -62,6 +88,11 @@ public final class MarkdownRenderer {
                 sb.append("\n");
             }
         }
+    }
+
+    private static String stepKey(CallStep s) {
+        String snippet = s.snippet() == null ? "" : s.snippet();
+        return s.callerFqn() + "→" + s.calleeFqn() + "#" + Integer.toHexString(snippet.hashCode());
     }
 
     /**

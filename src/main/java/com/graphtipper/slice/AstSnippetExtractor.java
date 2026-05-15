@@ -107,8 +107,19 @@ public final class AstSnippetExtractor {
         Statement prev = null;
         List<Statement> ordered = new ArrayList<>(selected);
         ordered.sort(Comparator.comparingInt(st -> st.getBegin().get().line));
+
+        // Skip statements whose source range is fully covered by an already-emitted
+        // statement on the same line(s). This avoids the "duplicate for-header" rendering
+        // when a single-line `for (x : xs) { body(); }` selects BOTH the ForEachStmt
+        // header and its inner ExpressionStmt — they map to the same source line.
+        Set<Integer> emittedLines = new HashSet<>();
+
         for (Statement s : ordered) {
-            if (prev != null && s.getBegin().get().line > prev.getEnd().get().line + 1) {
+            int begLine = s.getBegin().get().line;
+            int endLine = s.getEnd().get().line;
+            if (begLine == endLine && emittedLines.contains(begLine)) continue;
+
+            if (prev != null && begLine > prev.getEnd().get().line + 1) {
                 body.add("    // ...");
             }
             String code;
@@ -116,13 +127,20 @@ public final class AstSnippetExtractor {
                     || s instanceof ForEachStmt || s instanceof TryStmt) {
                 // Render only the header line for control structures — the slice walk has
                 // already pulled in any inner statements that contribute to the call's data.
-                code = rawLines.get(s.getBegin().get().line - 1);
+                code = rawLines.get(begLine - 1);
                 if (!code.trim().endsWith("{")) code = code + " {";
             } else {
-                code = String.join("\n", rawLines.subList(
-                        s.getBegin().get().line - 1, s.getEnd().get().line));
+                code = String.join("\n", rawLines.subList(begLine - 1, endLine));
             }
             body.add(code);
+            // For control structures we render only the header line, so only mark THAT
+            // line — the inner statements live on subsequent lines and must still emit.
+            if (s instanceof IfStmt || s instanceof WhileStmt || s instanceof ForStmt
+                    || s instanceof ForEachStmt || s instanceof TryStmt) {
+                emittedLines.add(begLine);
+            } else {
+                for (int ln = begLine; ln <= endLine; ln++) emittedLines.add(ln);
+            }
             prev = s;
         }
         body.add("}");
@@ -254,18 +272,62 @@ public final class AstSnippetExtractor {
 
         // Capture headers of enclosing control structures (if/while/for/try) so the
         // rendered snippet shows the code path that leads to the call.
+        // ALSO capture catch/finally bodies of enclosing try blocks — for test methods
+        // these contain the assert*(...) calls that specify exception behavior.
         Node ctxNode = callStmt;
         while (ctxNode != null) {
             ctxNode = ctxNode.getParentNode().orElse(null);
             if (ctxNode == null || ctxNode == body) break;
             if (ctxNode instanceof IfStmt || ctxNode instanceof WhileStmt
-                    || ctxNode instanceof ForStmt || ctxNode instanceof ForEachStmt
-                    || ctxNode instanceof TryStmt) {
+                    || ctxNode instanceof ForStmt || ctxNode instanceof ForEachStmt) {
                 selected.add((Statement) ctxNode);
+            }
+            if (ctxNode instanceof TryStmt ts) {
+                selected.add(ts);
+                // Pull catch bodies in full — that's where assertEquals(...) usually lives.
+                for (var cc : ts.getCatchClauses()) {
+                    for (Statement cs : cc.getBody().getStatements()) selected.add(cs);
+                }
+                ts.getFinallyBlock().ifPresent(fb -> {
+                    for (Statement fs : fb.getStatements()) selected.add(fs);
+                });
+            }
+        }
+
+        // Forward slice from the call statement to end of method:
+        //   - Statements that use names produced by the call (e.g. the LHS variable).
+        //   - Bare assertion/verification calls (assertX, expectX, verifyX, fail, assume*).
+        // This is what turns "we showed the call" into "we showed the expected behavior",
+        // which is the single biggest piece of context an LLM needs to satisfy tests.
+        Set<String> produced = new LinkedHashSet<>(definedBy(callStmt));
+        boolean passedCall = false;
+        for (Statement s : ordered) {
+            if (s == callStmt) { passedCall = true; continue; }
+            if (!passedCall) continue;
+            if (selected.contains(s)) continue;
+            Set<String> usedNames = new LinkedHashSet<>();
+            addAllNames(s, usedNames);
+            boolean usesProduced = !produced.isEmpty() && usedNames.stream().anyMatch(produced::contains);
+            if (usesProduced || isAssertionLike(s)) {
+                selected.add(s);
+                produced.addAll(definedBy(s));
             }
         }
 
         return new SliceResult(selected, refined, truncated);
+    }
+
+    /** Heuristic: a statement is "assertion-like" if its top-level expression is a method
+     *  call whose name starts with assert / expect / verify / fail / assume. Covers JUnit,
+     *  AssertJ, Hamcrest assertions, and TestNG patterns. */
+    private boolean isAssertionLike(Statement s) {
+        if (!(s instanceof ExpressionStmt es)) return false;
+        Expression e = es.getExpression();
+        if (!(e instanceof MethodCallExpr mc)) return false;
+        String name = mc.getName().asString();
+        return name.startsWith("assert") || name.startsWith("expect")
+                || name.startsWith("verify") || name.startsWith("assume")
+                || name.equals("fail") || name.equals("failBecauseExceptionWasNotThrown");
     }
 
     private Statement enclosingStatement(Node callNode) {

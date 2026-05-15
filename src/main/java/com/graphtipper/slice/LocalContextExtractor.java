@@ -20,13 +20,37 @@ public final class LocalContextExtractor {
     private List<LocalContext.SiblingMember> collectSiblings(ProjectGraph g, Node.Method target) {
         var out = new ArrayList<LocalContext.SiblingMember>();
         String targetClass = ownerClassFqn(target);
-        // Sibling methods called by target
-        for (Edge.Calls c : g.outgoingCalls(target.id())) {
-            if (!(g.byId(c.toId()) instanceof Node.Method m)) continue;
+        var seenSignatures = new LinkedHashSet<String>();
+
+        // All methods of the same class (not only those called by target). This gives
+        // the LLM the public/internal API surface needed to choose how to interact with
+        // the data structure target manipulates — getters, constructors, factories, etc.
+        //
+        // Filter out synthetic stubs (file is null or "<empty>", which javasrc2cpg uses
+        // for JDK / unresolved methods) and methods whose source range is missing.
+        for (Node n : g.allNodes()) {
+            if (!(n instanceof Node.Method m)) continue;
+            if (m.id().equals(target.id())) continue;
             if (!ownerClassFqn(m).equals(targetClass)) continue;
+            if (!hasReadableSource(m)) continue;
+            if (!seenSignatures.add(m.signature())) continue;
             out.add(renderMember(m));
         }
-        // Sibling fields read/written
+
+        // Nested types: for a target inside `picocli.CommandLine$Help$TextTable`, surface
+        // `picocli.CommandLine$Help$TextTable$Cell` and similar inner types. The LLM needs
+        // their constructors + public method signatures to know what to return.
+        String nestedPrefix = targetClass + "$";
+        for (Node n : g.allNodes()) {
+            if (!(n instanceof Node.Method m)) continue;
+            String owner = ownerClassFqn(m);
+            if (!owner.startsWith(nestedPrefix)) continue;
+            if (!hasReadableSource(m)) continue;
+            if (!seenSignatures.add(owner + ":" + m.signature())) continue;
+            out.add(renderMember(m));
+        }
+
+        // Sibling fields read/written by target
         for (Edge e : g.outgoing(target.id())) {
             String fid = null;
             if (e instanceof Edge.Reads r) fid = r.toId();
@@ -108,5 +132,15 @@ public final class LocalContextExtractor {
     private String ownerClassFqn(Node.Method m) {
         int dot = m.fqn().lastIndexOf('.');
         return dot < 0 ? "" : m.fqn().substring(0, dot);
+    }
+
+    /** True if this method has a real source location we can read from disk.
+     *  Joern's javasrc2cpg materialises stub METHOD nodes for JDK / unresolved methods
+     *  with file == {@code "<empty>"} and line numbers <= 0; those must be skipped. */
+    private static boolean hasReadableSource(Node.Method m) {
+        if (m.file() == null) return false;
+        if (m.file().isEmpty() || m.file().equals("<empty>")) return false;
+        if (m.lineStart() <= 0 || m.lineEnd() < m.lineStart()) return false;
+        return true;
     }
 }
