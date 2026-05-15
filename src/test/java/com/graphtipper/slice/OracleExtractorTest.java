@@ -22,4 +22,37 @@ class OracleExtractorTest {
         assertThat(co.substring()).isEqualTo("expected substring");
         assertThat(no).isNotNull();
     }
+
+    private java.nio.file.Path fixture(String name) {
+        return java.nio.file.Paths.get("src/test/resources/oracle-fixtures", name);
+    }
+
+    @Test
+    void extracts_assertEquals_with_literal_expected() {
+        var ex = new OracleExtractor();
+        var oracles = ex.extract(fixture("AssertEqualsTests.java"), "oraclefix.AssertEqualsTests.testReturnEquals");
+        assertThat(oracles).hasSize(1);
+        assertThat(oracles.get(0)).isInstanceOfSatisfying(Oracle.Equals.class, e -> {
+            assertThat(e.expected()).isEqualTo("42");
+            assertThat(e.actualExpr()).isEqualTo("x");
+        });
+    }
+
+    @Test
+    void extracts_assertEquals_with_string_literal() {
+        var ex = new OracleExtractor();
+        var oracles = ex.extract(fixture("AssertEqualsTests.java"), "oraclefix.AssertEqualsTests.testStringEquals");
+        assertThat(oracles).hasSize(1);
+        assertThat(oracles.get(0)).isInstanceOfSatisfying(Oracle.Equals.class, e ->
+            assertThat(e.expected()).isEqualTo("\"hello\""));
+    }
+
+    @Test
+    void extracts_assertThrows_with_class_literal() {
+        var ex = new OracleExtractor();
+        var oracles = ex.extract(fixture("AssertThrowsTests.java"), "oraclefix.AssertThrowsTests.testThrowsLambda");
+        assertThat(oracles).hasSize(1);
+        assertThat(oracles.get(0)).isInstanceOfSatisfying(Oracle.Exception.class, e ->
+            assertThat(e.type()).isEqualTo("IllegalArgumentException"));
+    }
 }
