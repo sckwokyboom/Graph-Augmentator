@@ -37,4 +37,38 @@ class JsonRendererTest {
         assertThat(node.path("budget").path("tokensUsed").asInt()).isGreaterThan(0);
         assertThat(node.path("budget").path("tokensMax").asInt()).isEqualTo(20_000);
     }
+
+    @Test
+    void json_schema_is_v2_and_contains_consumers_clusters_longtail() throws Exception {
+        var target = new Node.Method(
+                "m_t", "T.target", "T.target()", List.of(), "void", "T.java", 1, 5,
+                null, false, false, List.of());
+        var testMethod = new Node.Method(
+                "m_test", "TC.t", "TC.t()", List.of(), "void", "TC.java", 1, 1,
+                null, true, false, List.of());
+        var directTest = new DirectTest(
+                testMethod, List.of(), new Oracle.None(), "@Test void t() {}");
+        var member = new ClusterMember(testMethod, List.of(),
+                new Oracle.Exception("X"));
+        var sig = new PathSignature(List.of("E", "C", "target"));
+        var cluster = new PathCluster(sig, "E", "C", 3, List.of(member), List.of());
+        var consumer = new ConsumerContract(
+                "C", "F.java", 1, "body",
+                ReturnValueUsage.empty(),
+                ExceptionHandlingNearCall.none(),
+                List.of(), List.of(cluster), 1);
+        var singleton = new PathCluster(sig, "E", "C", 3, List.of(member), List.of());
+        var artifact = new Artifact(target, "", List.of(),
+                List.of(directTest), List.of(consumer),
+                List.of(singleton), false,
+                new LocalContext(List.of(), List.of()));
+
+        String json = new JsonRenderer().render(artifact);
+        assertThat(json).contains("\"schemaVersion\" : \"2.0\"");
+        assertThat(json).contains("\"directTests\" :");
+        assertThat(json).contains("\"consumers\" :");
+        assertThat(json).contains("\"clusters\" :");
+        assertThat(json).contains("\"longTail\" :");
+        assertThat(json).doesNotContain("\"chains\":[{");  // top-level chains removed (still in graph.json)
+    }
 }

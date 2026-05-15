@@ -9,6 +9,166 @@ import com.graphtipper.util.TokenBudget;
 public final class JsonRenderer {
     private final ObjectMapper M = new ObjectMapper();
 
+    // -------------------------------------------------------------------------
+    // v2 schema render — no TokenBudget argument
+    // -------------------------------------------------------------------------
+
+    public String render(Artifact a) {
+        ObjectNode root = M.createObjectNode();
+        root.put("schemaVersion", "2.0");
+
+        // Target
+        ObjectNode target = root.putObject("target");
+        target.put("fqn", a.target().fqn());
+        target.put("file", a.target().file());
+        target.put("lineStart", a.target().lineStart());
+        target.put("lineEnd", a.target().lineEnd());
+
+        // Direct tests
+        ArrayNode dts = root.putArray("directTests");
+        for (var dt : a.directTests()) {
+            ObjectNode o = dts.addObject();
+            o.put("fqn", dt.testMethod().fqn());
+            o.put("file", dt.testMethod().file());
+            o.put("line", dt.testMethod().lineStart());
+            o.put("snippet", dt.snippet());
+            renderArgs(o.putArray("args"), dt.args());
+            o.set("oracle", renderOracleNode(dt.oracle()));
+        }
+
+        // Consumers + clusters
+        ArrayNode consumers = root.putArray("consumers");
+        for (var c : a.consumers()) {
+            ObjectNode co = consumers.addObject();
+            co.put("fqn", c.consumerFqn());
+            co.put("file", c.file());
+            co.put("line", c.line());
+            co.put("chainsCovered", c.chainsCovered());
+            co.put("bodySlice", c.bodySlice());
+            ArrayNode kinds = co.putArray("returnValueUsageKinds");
+            for (var k : c.returnValueUsage().kinds()) kinds.add(k.name());
+            ArrayNode fields = co.putArray("returnValueFieldsRead");
+            for (var f : c.returnValueUsage().fieldsRead()) fields.add(f);
+            ObjectNode eh = co.putObject("exceptionHandling");
+            eh.put("inTryCatch", c.exceptionHandling().inTryCatch());
+            ArrayNode caught = eh.putArray("caughtTypes");
+            for (var t : c.exceptionHandling().caughtTypes()) caught.add(t);
+            ArrayNode imps = co.putArray("implications");
+            for (var i : c.implications()) imps.add(i.text());
+            ArrayNode cls = co.putArray("clusters");
+            for (var cluster : c.clusters()) cls.add(renderClusterNode(cluster));
+        }
+
+        // Long tail
+        ObjectNode lt = root.putObject("longTail");
+        lt.put("uncoveredSingletonCount", a.longTailSingletons().size());
+        ArrayNode lts = lt.putArray("singletons");
+        for (var s : a.longTailSingletons()) lts.add(renderClusterNode(s));
+
+        // Local context
+        ObjectNode lc = root.putObject("localContext");
+        ArrayNode sibs = lc.putArray("siblings");
+        for (var s : a.localContext().siblings()) {
+            ObjectNode o = sibs.addObject();
+            o.put("signature", s.signature());
+            if (s.javadoc() != null) o.put("javadoc", s.javadoc());
+            o.put("body", s.body());
+            o.put("truncated", s.truncated());
+        }
+
+        // Budget / truncated
+        root.put("truncated", a.truncated());
+
+        // Reserved
+        root.putObject("negativeMemory");
+
+        try {
+            return M.writerWithDefaultPrettyPrinter().writeValueAsString(root);
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    private ObjectNode renderClusterNode(PathCluster cluster) {
+        ObjectNode out = M.createObjectNode();
+        out.put("entryPoint", cluster.entryPoint());
+        out.put("immediateConsumer", cluster.immediateConsumer());
+        out.put("depth", cluster.depth());
+        out.put("chainsCovered", cluster.chainsCovered());
+        ArrayNode sig = out.putArray("pathSignature");
+        for (var fqn : cluster.signature().fqns()) sig.add(fqn);
+        ArrayNode members = out.putArray("members");
+        for (var m : cluster.members()) {
+            ObjectNode mo = members.addObject();
+            mo.put("testFqn", m.testMethod().fqn());
+            mo.put("file", m.testMethod().file());
+            mo.put("line", m.testMethod().lineStart());
+            renderArgs(mo.putArray("argsAtTarget"), m.argsAtTarget());
+            mo.set("oracle", renderOracleNode(m.oracle()));
+        }
+        ArrayNode sigs = out.putArray("behaviorSignals");
+        for (var s : cluster.signals()) {
+            ObjectNode so = sigs.addObject();
+            so.put("tag", s.tag());
+            so.put("evidence", s.evidence());
+        }
+        return out;
+    }
+
+    private void renderArgs(ArrayNode out, java.util.List<ArgOrigin> args) {
+        for (var a : args) {
+            ObjectNode o = out.addObject();
+            o.put("index", a.argIndex());
+            o.put("kind", a.kind().name());
+            if (a.value() != null) o.put("value", a.value());
+            if (a.exprText() != null) o.put("exprText", a.exprText());
+            if (a.paramName() != null) o.put("paramName", a.paramName());
+        }
+    }
+
+    private ObjectNode renderOracleNode(Oracle o) {
+        ObjectNode out = M.createObjectNode();
+        switch (o) {
+            case Oracle.Equals eq -> {
+                out.put("kind", "Equals");
+                out.put("expected", eq.expected());
+                out.put("actualExpr", eq.actualExpr());
+            }
+            case Oracle.Exception ex -> {
+                out.put("kind", "Exception");
+                out.put("type", ex.type());
+            }
+            case Oracle.ExceptionMessage em -> {
+                out.put("kind", "ExceptionMessage");
+                out.put("type", em.type());
+                out.put("matchKind", em.kind().name());
+                out.put("message", em.message());
+            }
+            case Oracle.Boolean b -> {
+                out.put("kind", "Boolean");
+                out.put("expected", b.expected());
+                out.put("expr", b.expr());
+            }
+            case Oracle.Nullability n -> {
+                out.put("kind", "Nullability");
+                out.put("expectNonNull", n.expectNonNull());
+                out.put("expr", n.expr());
+            }
+            case Oracle.Contains c -> {
+                out.put("kind", "Contains");
+                out.put("expr", c.expr());
+                out.put("substring", c.substring());
+            }
+            case Oracle.None __ -> out.put("kind", "None");
+        }
+        return out;
+    }
+
+    // -------------------------------------------------------------------------
+    // v1 schema render — retained for backward compatibility (GraphJsonRenderer
+    // and legacy callers still use this path)
+    // -------------------------------------------------------------------------
+
     public String render(Artifact a, TokenBudget budget) {
         ObjectNode root = M.createObjectNode();
         root.put("schemaVersion", "1.0");
