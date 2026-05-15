@@ -531,4 +531,118 @@ public final class AstSnippetExtractor {
         }
         return best;
     }
+
+    /**
+     * Slice a consumer's method body for artifact §4.4 rendering.
+     * If the body has ≤ 30 statements, returns the full body (with signature line).
+     * Otherwise, returns the signature line plus a minimal slice of statements
+     * containing the first call to {@code targetSimpleName} and related statements.
+     *
+     * @return the slice, or null if the method or the call site is not found.
+     */
+    public String sliceConsumerBody(Path file, String methodFqn, String targetSimpleName) {
+        CacheEntry entry = load(file);
+        if (entry == null || !entry.parseOk) return null;
+        CompilationUnit cu = entry.cu;
+
+        Optional<MethodDeclaration> methodOpt = findMethodByFqn(cu, methodFqn);
+        if (methodOpt.isEmpty()) return null;
+        MethodDeclaration md = methodOpt.get();
+        if (md.getBody().isEmpty()) return null;
+        BlockStmt body = md.getBody().get();
+
+        // Count statements (recursive count of Statement nodes within the body).
+        long stmtCount = body.findAll(Statement.class).size();
+        String signatureLine = md.getDeclarationAsString(false, false, false);
+
+        if (stmtCount <= 30) {
+            return signatureLine + " " + body.toString();
+        }
+
+        // Find the first call to targetSimpleName.
+        Optional<MethodCallExpr> callOpt = body.findAll(MethodCallExpr.class).stream()
+                .filter(c -> c.getNameAsString().equals(targetSimpleName))
+                .findFirst();
+        if (callOpt.isEmpty()) return null;
+
+        // Find the statement containing the call and slice around it.
+        MethodCallExpr callExpr = callOpt.get();
+        Statement callStmt = enclosingStatement(callExpr);
+        if (callStmt == null) return null;
+
+        // Collect statements in the method body that are relevant: the call statement
+        // and any statements after it that use its result or are control-flow related.
+        List<Statement> allStmts = flattenStatements(body);
+        int callIdx = allStmts.indexOf(callStmt);
+        if (callIdx < 0) return null;
+
+        LinkedHashSet<Statement> selected = new LinkedHashSet<>();
+        selected.add(callStmt);
+
+        // Forward slice from call to end: include statements using the call's result
+        // and assertion-like statements.
+        Set<String> produced = definedBy(callStmt);
+        for (int i = callIdx + 1; i < allStmts.size(); i++) {
+            Statement s = allStmts.get(i);
+            Set<String> usedNames = new LinkedHashSet<>();
+            addAllNames(s, usedNames);
+            boolean usesProduced = !produced.isEmpty() && usedNames.stream().anyMatch(produced::contains);
+            if (usesProduced || isAssertionLike(s)) {
+                selected.add(s);
+                produced.addAll(definedBy(s));
+            }
+        }
+
+        // Capture enclosing control structures.
+        Node ctxNode = callStmt;
+        while (ctxNode != null) {
+            ctxNode = ctxNode.getParentNode().orElse(null);
+            if (ctxNode == null || ctxNode == body) break;
+            if (ctxNode instanceof IfStmt || ctxNode instanceof WhileStmt
+                    || ctxNode instanceof ForStmt || ctxNode instanceof ForEachStmt) {
+                selected.add((Statement) ctxNode);
+            }
+        }
+
+        // Render the selected statements.
+        List<String> renderedLines = new ArrayList<>();
+        renderedLines.add(signatureLine + " {");
+        List<Statement> ordered = new ArrayList<>(selected);
+        ordered.sort(Comparator.comparingInt(st -> st.getBegin().get().line));
+        Statement prev = null;
+        Set<Integer> emittedLines = new HashSet<>();
+        for (Statement s : ordered) {
+            int begLine = s.getBegin().get().line;
+            int endLine = s.getEnd().get().line;
+            if (begLine == endLine && emittedLines.contains(begLine)) continue;
+            if (prev != null && begLine > prev.getEnd().get().line + 1) {
+                renderedLines.add("    // ...");
+            }
+            String code = entry.rawLines.get(begLine - 1);
+            if (!code.trim().endsWith("{")) code = code + " {";
+            renderedLines.add(code);
+            for (int ln = begLine; ln <= endLine; ln++) emittedLines.add(ln);
+            prev = s;
+        }
+        renderedLines.add("}");
+        return String.join("\n", renderedLines);
+    }
+
+    /**
+     * Look up a method declaration by fully qualified name within a CompilationUnit.
+     * The FQN format is "package.ClassName.methodName" or "package.OuterClass.InnerClass.methodName".
+     */
+    private Optional<MethodDeclaration> findMethodByFqn(CompilationUnit cu, String fqn) {
+        int lastDot = fqn.lastIndexOf('.');
+        if (lastDot < 0) return Optional.empty();
+        String methodName = fqn.substring(lastDot + 1);
+        String enclosingFqn = fqn.substring(0, lastDot);
+        String simpleClass = enclosingFqn.substring(
+                Math.max(enclosingFqn.lastIndexOf('.'), enclosingFqn.lastIndexOf('$')) + 1);
+        return cu.findAll(MethodDeclaration.class).stream()
+                .filter(m -> m.getNameAsString().equals(methodName))
+                .filter(m -> m.findAncestor(com.github.javaparser.ast.body.TypeDeclaration.class)
+                        .map(t -> t.getNameAsString().equals(simpleClass)).orElse(false))
+                .findFirst();
+    }
 }

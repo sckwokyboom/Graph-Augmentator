@@ -152,4 +152,35 @@ class AstSnippetExtractorTest {
         assertThat(s.renderedBody().get(0)).contains("runChain");
         assertThat(s.renderedBody().get(s.renderedBody().size() - 1).trim()).isEqualTo("}");
     }
+
+    @Test
+    void sliceConsumerBody_returns_full_body_when_short() {
+        var ex = new AstSnippetExtractor();
+        var fixture = java.nio.file.Paths.get("src/test/resources/consumer-fixtures/SimpleConsumer.java");
+        String slice = ex.sliceConsumerBody(fixture, "consumerfix.SimpleConsumer.shortConsumer", "target");
+        assertThat(slice).contains("void shortConsumer()");
+        assertThat(slice).contains("int r = target(5)");
+        assertThat(slice).contains("if (r > 0)");
+        assertThat(slice).contains("System.out.println(r)");
+    }
+
+    @Test
+    void sliceConsumerBody_slices_long_body_to_block_around_call() {
+        var ex = new AstSnippetExtractor();
+        var fixture = java.nio.file.Paths.get("src/test/resources/consumer-fixtures/SimpleConsumer.java");
+        String slice = ex.sliceConsumerBody(fixture, "consumerfix.SimpleConsumer.longConsumer", "target");
+        assertThat(slice).contains("int longConsumer()");
+        assertThat(slice).contains("target(100)");
+        // The slice should NOT contain all 25+ padding lines:
+        long nonEmptyLineCount = slice.lines().filter(l -> !l.trim().isEmpty()).count();
+        assertThat(nonEmptyLineCount).isLessThan(30);
+    }
+
+    @Test
+    void sliceConsumerBody_returns_null_when_method_not_found() {
+        var ex = new AstSnippetExtractor();
+        var fixture = java.nio.file.Paths.get("src/test/resources/consumer-fixtures/SimpleConsumer.java");
+        String slice = ex.sliceConsumerBody(fixture, "consumerfix.SimpleConsumer.noSuchMethod", "target");
+        assertThat(slice).isNull();
+    }
 }
