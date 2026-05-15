@@ -97,6 +97,31 @@ class MarkdownRendererTest {
     }
 
     @Test
+    void direct_tests_section_renders_table_and_snippets() {
+        var target = new com.graphtipper.model.Node.Method(
+                "m_t", "T.target", "T.target", java.util.List.of(), "void",
+                "T.java", 1, 5, null, false, false, java.util.List.of());
+        var testMethod = new com.graphtipper.model.Node.Method(
+                "m_test", "HelpTest.directCall", "HelpTest.directCall", java.util.List.of(), "void",
+                "HelpTest.java", 100, 110, null, true, false, java.util.List.of());
+        var directTest = new com.graphtipper.slice.DirectTest(
+                testMethod,
+                java.util.List.of(com.graphtipper.slice.ArgOrigin.literal(0, "1", "HelpTest.java", 101)),
+                new com.graphtipper.slice.Oracle.Exception("IllegalArgumentException"),
+                "@Test void directCall() { tt.target(1); }");
+        var artifact = new Artifact(target, "", java.util.List.of(),
+                java.util.List.of(directTest),
+                java.util.List.of(), java.util.List.of(), false,
+                new com.graphtipper.slice.LocalContext(java.util.List.of(), java.util.List.of()));
+        var budget = new com.graphtipper.util.TokenBudget(20000); budget.charge(100);
+        String md = new MarkdownRenderer().render(artifact, budget, "abc", "proj");
+        assertThat(md).contains("## Direct tests");
+        assertThat(md).contains("HelpTest.directCall");
+        assertThat(md).contains("throws IllegalArgumentException");
+        assertThat(md).contains("tt.target(1)");
+    }
+
+    @Test
     void header_carries_v2_counters() {
         var target = new com.graphtipper.model.Node.Method(
                 "m_t", "T.target", "T.target", java.util.List.of(), "void",

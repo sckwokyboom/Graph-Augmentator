@@ -30,6 +30,7 @@ public final class MarkdownRenderer {
           .append("\n\n");
 
         renderTarget(sb, a);
+        renderDirectTests(sb, a);
         renderChains(sb, a);
         renderLocalContext(sb, a);
         sb.append("## Negative Memory\n_(reserved — not populated in V1)_\n");
@@ -140,6 +141,42 @@ public final class MarkdownRenderer {
             case INDEXED_ACCESS -> "indexed access `" + o.exprText() + "`";
             case CONSTRUCTOR -> "new `" + o.exprText() + "`";
             case UNKNOWN -> "unknown";
+        };
+    }
+
+    private void renderDirectTests(StringBuilder sb, Artifact a) {
+        if (a.directTests().isEmpty()) return;
+        sb.append("## Direct tests\n\n");
+        sb.append("| Test (file:line) | Args | Oracle |\n");
+        sb.append("|---|---|---|\n");
+        var argRenderer = new ArgRenderer();
+        for (var dt : a.directTests()) {
+            sb.append("| `").append(dt.testMethod().fqn()).append("` (")
+              .append(dt.testMethod().file()).append(":").append(dt.testMethod().lineStart()).append(") | ")
+              .append(escapePipes(argRenderer.renderTuple(dt.args()))).append(" | ")
+              .append(escapePipes(renderOracle(dt.oracle()))).append(" |\n");
+        }
+        sb.append("\n**Test sources:**\n");
+        for (var dt : a.directTests()) {
+            sb.append("```java\n// ").append(dt.testMethod().file()).append(":")
+              .append(dt.testMethod().lineStart()).append("\n");
+            sb.append(dt.snippet() == null ? "(snippet unavailable)" : dt.snippet()).append("\n```\n\n");
+        }
+    }
+
+    private static String escapePipes(String s) { return s.replace("|", "\\|"); }
+
+    private static String renderOracle(com.graphtipper.slice.Oracle o) {
+        return switch (o) {
+            case com.graphtipper.slice.Oracle.Equals eq -> "returns " + eq.expected();
+            case com.graphtipper.slice.Oracle.Exception ex -> "throws " + ex.type();
+            case com.graphtipper.slice.Oracle.ExceptionMessage em -> "throws " + em.type() + ".msg "
+                    + (em.kind() == com.graphtipper.slice.Oracle.MatchKind.EXACT ? "==" : "contains")
+                    + " \"" + em.message() + "\"";
+            case com.graphtipper.slice.Oracle.Boolean b -> (b.expected() ? "assertTrue(" : "assertFalse(") + b.expr() + ")";
+            case com.graphtipper.slice.Oracle.Nullability n -> n.expr() + (n.expectNonNull() ? " is non-null" : " is null");
+            case com.graphtipper.slice.Oracle.Contains c -> c.expr() + " contains \"" + c.substring() + "\"";
+            case com.graphtipper.slice.Oracle.None __ -> "<no assertion found>";
         };
     }
 
