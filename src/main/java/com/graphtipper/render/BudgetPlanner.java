@@ -62,6 +62,22 @@ public final class BudgetPlanner {
         cur = dropLowRankConsumers(cur);
         if (fitEstimate(cur, tokenBudget) <= tokenBudget.max()) return cur;
 
+        // Step 6: truncate sibling bodies in local context (replace with "// truncated").
+        cur = truncateSiblingBodies(cur);
+        if (fitEstimate(cur, tokenBudget) <= tokenBudget.max()) return cur;
+
+        // Step 7: drop entire local context.
+        cur = dropLocalContext(cur);
+        if (fitEstimate(cur, tokenBudget) <= tokenBudget.max()) return cur;
+
+        // Step 8: drop legacy chain arg-origin detail (keep only snippet text).
+        cur = stripChainArgOrigins(cur);
+        if (fitEstimate(cur, tokenBudget) <= tokenBudget.max()) return cur;
+
+        // Step 9: drop all legacy chains entirely.
+        cur = dropAllChains(cur);
+        if (fitEstimate(cur, tokenBudget) <= tokenBudget.max()) return cur;
+
         // Protected minimum check.
         Artifact min = protectedMinimum(cur);
         if (fitEstimate(min, tokenBudget) > tokenBudget.max()) {
@@ -196,13 +212,60 @@ public final class BudgetPlanner {
                 /*truncated=*/true, a.localContext());
     }
 
+    /** Strips arg-origin detail from legacy chains, retaining only step snippets. */
+    private Artifact stripChainArgOrigins(Artifact a) {
+        var stripped = new java.util.ArrayList<Chain>();
+        for (Chain ch : a.chains()) {
+            var newSteps = new java.util.ArrayList<CallStep>();
+            for (CallStep s : ch.steps()) newSteps.add(s.withEnrichment(s.snippet(), java.util.List.of()));
+            stripped.add(new Chain(ch.test(), newSteps, ch.virtualSteps()));
+        }
+        return new Artifact(a.target(), a.currentBody(), stripped,
+                a.directTests(), a.consumers(), a.longTailSingletons(), a.truncated(), a.localContext());
+    }
+
+    /** Drops all legacy chains from the artifact. */
+    private Artifact dropAllChains(Artifact a) {
+        return new Artifact(a.target(), a.currentBody(), java.util.List.of(),
+                a.directTests(), a.consumers(), a.longTailSingletons(),
+                /*truncated=*/true, a.localContext());
+    }
+
+    /** Replaces each sibling body with {@code "// truncated"} to free budget. */
+    private Artifact truncateSiblingBodies(Artifact a) {
+        var truncSiblings = new java.util.ArrayList<LocalContext.SiblingMember>();
+        for (var s : a.localContext().siblings()) {
+            truncSiblings.add(new LocalContext.SiblingMember(
+                    s.signature(), s.javadoc(), "// truncated", true));
+        }
+        return new Artifact(a.target(), a.currentBody(), a.chains(),
+                a.directTests(), a.consumers(), a.longTailSingletons(),
+                a.truncated(), new LocalContext(truncSiblings, a.localContext().usedTypes()));
+    }
+
+    /** Drops the entire local context (siblings + usedTypes). */
+    private Artifact dropLocalContext(Artifact a) {
+        return new Artifact(a.target(), a.currentBody(), a.chains(),
+                a.directTests(), a.consumers(), a.longTailSingletons(),
+                a.truncated(), new LocalContext(java.util.List.of(), java.util.List.of()));
+    }
+
     /**
      * Returns the irreducible protected minimum: target + direct tests + top-1
-     * consumer body slice + top-1 cluster primary row.
+     * consumer body slice (truncated to 2000 chars) + top-1 cluster primary row.
+     * LocalContext is stripped entirely from the minimum.
      */
     private Artifact protectedMinimum(Artifact a) {
-        if (a.consumers().isEmpty()) return a;
+        var emptyCtx = new LocalContext(java.util.List.of(), java.util.List.of());
+        if (a.consumers().isEmpty()) {
+            return new Artifact(a.target(), a.currentBody(), a.chains(),
+                    a.directTests(), List.of(), List.of(), true, emptyCtx);
+        }
         ConsumerContract topConsumer = a.consumers().get(0);
+        // Truncate body slice to at most 2000 chars to keep the protected minimum bounded.
+        String sliceTrunc = topConsumer.bodySlice().length() > 2000
+                ? topConsumer.bodySlice().substring(0, 2000) + "\n// …"
+                : topConsumer.bodySlice();
         List<PathCluster> minClusters;
         if (topConsumer.clusters().isEmpty()) {
             minClusters = List.of();
@@ -213,11 +276,11 @@ public final class BudgetPlanner {
         }
         ConsumerContract minConsumer = new ConsumerContract(
                 topConsumer.consumerFqn(), topConsumer.file(), topConsumer.line(),
-                topConsumer.bodySlice(), topConsumer.returnValueUsage(), topConsumer.exceptionHandling(),
-                topConsumer.implications(), minClusters, topConsumer.chainsCovered());
-        return new Artifact(a.target(), a.currentBody(), a.chains(),
+                sliceTrunc, topConsumer.returnValueUsage(), topConsumer.exceptionHandling(),
+                java.util.List.of(), minClusters, topConsumer.chainsCovered());
+        return new Artifact(a.target(), a.currentBody(), List.of(),
                 a.directTests(), List.of(minConsumer),
-                List.of(), /*truncated=*/true, a.localContext());
+                List.of(), /*truncated=*/true, emptyCtx);
     }
 
     /**
