@@ -81,4 +81,18 @@ class ConsumerDeriverTest {
         assertThat(reqs).extracting(ImpliedRequirement::text)
                 .anyMatch(t -> t.contains("IOException"));
     }
+
+    @Test
+    void consumerContract_constructs_with_all_fields() {
+        var contract = new ConsumerContract(
+            "C.consumer", "C.java", 42, "public void consumer() { target(); }",
+            ReturnValueUsage.empty(),
+            ExceptionHandlingNearCall.none(),
+            List.of(new ImpliedRequirement("test")),
+            List.of(),
+            1511);
+        assertThat(contract.consumerFqn()).isEqualTo("C.consumer");
+        assertThat(contract.chainsCovered()).isEqualTo(1511);
+        assertThat(contract.implications()).hasSize(1);
+    }
 }
