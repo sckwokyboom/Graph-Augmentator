@@ -34,9 +34,18 @@ public final class OracleExtractor {
             if (name.equals("assertEquals") && isInsideCatchClause(call)) {
                 return;
             }
+            // Skip boolean assertions inside try/catch catch clauses (let try/catch handler process them)
+            if ((name.equals("assertTrue") || name.equals("assertFalse")) && isInsideCatchClause(call)) {
+                return;
+            }
             switch (name) {
                 case "assertEquals" -> handleAssertEquals(call, out);
                 case "assertThrows" -> handleAssertThrows(call, out);
+                case "assertTrue" -> handleAssertBoolean(call, true, out);
+                case "assertFalse" -> handleAssertBoolean(call, false, out);
+                case "assertNull" -> handleAssertNullability(call, false, out);
+                case "assertNotNull" -> handleAssertNullability(call, true, out);
+                case "assertThat" -> handleAssertThat(call, out);
                 default -> { /* not yet handled */ }
             }
         });
@@ -125,6 +134,36 @@ public final class OracleExtractor {
 
     private static boolean isInsideCatchClause(MethodCallExpr call) {
         return call.findAncestor(CatchClause.class).isPresent();
+    }
+
+    private void handleAssertBoolean(MethodCallExpr call, boolean expected, List<Oracle> out) {
+        if (call.getArguments().isEmpty()) return;
+        out.add(new Oracle.Boolean(expected, call.getArgument(0).toString()));
+    }
+
+    private void handleAssertNullability(MethodCallExpr call, boolean expectNonNull, List<Oracle> out) {
+        if (call.getArguments().isEmpty()) return;
+        out.add(new Oracle.Nullability(expectNonNull, call.getArgument(0).toString()));
+    }
+
+    private void handleAssertThat(MethodCallExpr call, List<Oracle> out) {
+        var args = call.getArguments();
+        if (args.size() < 2) return;
+        String actualExpr = args.get(0).toString();
+        Expression matcher = args.get(1);
+        // containsString("...") pattern
+        if (matcher instanceof MethodCallExpr mc
+                && mc.getNameAsString().equals("containsString")
+                && !mc.getArguments().isEmpty()
+                && mc.getArgument(0) instanceof StringLiteralExpr s) {
+            out.add(new Oracle.Contains(actualExpr, s.asString()));
+        }
+        // equalTo("...") / equalTo(literal) — emit as Equals
+        else if (matcher instanceof MethodCallExpr mc
+                && mc.getNameAsString().equals("equalTo")
+                && !mc.getArguments().isEmpty()) {
+            out.add(new Oracle.Equals(mc.getArgument(0).toString(), actualExpr));
+        }
     }
 
     private static String simpleName(String typeName) {

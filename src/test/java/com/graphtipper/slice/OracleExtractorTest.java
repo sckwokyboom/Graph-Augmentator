@@ -78,4 +78,44 @@ class OracleExtractorTest {
             assertThat(e.message()).isEqualTo("neg");
         });
     }
+
+    @Test
+    void extracts_assertTrue() {
+        var oracles = new OracleExtractor().extract(
+                fixture("HamcrestTests.java"), "oraclefix.HamcrestTests.testAssertTrue");
+        assertThat(oracles).hasSize(1);
+        assertThat(oracles.get(0)).isInstanceOfSatisfying(Oracle.Boolean.class, b -> {
+            assertThat(b.expected()).isTrue();
+            assertThat(b.expr()).isEqualTo("value() > 0");
+        });
+    }
+
+    @Test
+    void extracts_assertFalse() {
+        var oracles = new OracleExtractor().extract(
+                fixture("HamcrestTests.java"), "oraclefix.HamcrestTests.testAssertFalse");
+        assertThat(oracles.get(0)).isInstanceOfSatisfying(Oracle.Boolean.class, b ->
+                assertThat(b.expected()).isFalse());
+    }
+
+    @Test
+    void extracts_assertNull_and_assertNotNull() {
+        var ex = new OracleExtractor();
+        var nul = ex.extract(fixture("HamcrestTests.java"), "oraclefix.HamcrestTests.testAssertNull");
+        var nnul = ex.extract(fixture("HamcrestTests.java"), "oraclefix.HamcrestTests.testAssertNotNull");
+        assertThat(nul.get(0)).isInstanceOfSatisfying(Oracle.Nullability.class, n ->
+                assertThat(n.expectNonNull()).isFalse());
+        assertThat(nnul.get(0)).isInstanceOfSatisfying(Oracle.Nullability.class, n ->
+                assertThat(n.expectNonNull()).isTrue());
+    }
+
+    @Test
+    void extracts_assertThat_containsString() {
+        var oracles = new OracleExtractor().extract(
+                fixture("HamcrestTests.java"), "oraclefix.HamcrestTests.testAssertThatContains");
+        assertThat(oracles.get(0)).isInstanceOfSatisfying(Oracle.Contains.class, c -> {
+            assertThat(c.expr()).isEqualTo("text()");
+            assertThat(c.substring()).isEqualTo("hello");
+        });
+    }
 }
