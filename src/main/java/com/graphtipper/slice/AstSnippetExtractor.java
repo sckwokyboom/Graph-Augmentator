@@ -535,8 +535,8 @@ public final class AstSnippetExtractor {
     /**
      * Slice a consumer's method body for artifact §4.4 rendering.
      * If the body has ≤ 30 statements, returns the full body (with signature line).
-     * Otherwise, returns the signature line plus a minimal slice of statements
-     * containing the first call to {@code targetSimpleName} and related statements.
+     * Otherwise, returns the signature line plus the block enclosing the first call
+     * to {@code targetSimpleName} plus sibling return/break/throw statements.
      *
      * @return the slice, or null if the method or the call site is not found.
      */
@@ -565,67 +565,49 @@ public final class AstSnippetExtractor {
                 .findFirst();
         if (callOpt.isEmpty()) return null;
 
-        // Find the statement containing the call and slice around it.
+        // Walk up from the call to the nearest enclosing BlockStmt.
         MethodCallExpr callExpr = callOpt.get();
-        Statement callStmt = enclosingStatement(callExpr);
-        if (callStmt == null) return null;
+        Optional<BlockStmt> blockOpt = callExpr.findAncestor(BlockStmt.class);
+        if (blockOpt.isEmpty()) {
+            return signatureLine + " { /* call: " + targetSimpleName + " */ }";
+        }
 
-        // Collect statements in the method body that are relevant: the call statement
-        // and any statements after it that use its result or are control-flow related.
-        List<Statement> allStmts = flattenStatements(body);
-        int callIdx = allStmts.indexOf(callStmt);
-        if (callIdx < 0) return null;
+        BlockStmt enclosingBlock = blockOpt.get();
 
+        // Find the statement in the block that contains the call.
+        Statement callStmt = null;
+        for (Statement stmt : enclosingBlock.getStatements()) {
+            if (stmt.findAll(MethodCallExpr.class).stream()
+                    .anyMatch(c -> c == callExpr)) {
+                callStmt = stmt;
+                break;
+            }
+        }
+        if (callStmt == null) {
+            return signatureLine + " " + enclosingBlock.toString();
+        }
+
+        // Build minimal block: the call statement + sibling return/break/throw statements.
         LinkedHashSet<Statement> selected = new LinkedHashSet<>();
         selected.add(callStmt);
 
-        // Forward slice from call to end: include statements using the call's result
-        // and assertion-like statements.
-        Set<String> produced = definedBy(callStmt);
-        for (int i = callIdx + 1; i < allStmts.size(); i++) {
-            Statement s = allStmts.get(i);
-            Set<String> usedNames = new LinkedHashSet<>();
-            addAllNames(s, usedNames);
-            boolean usesProduced = !produced.isEmpty() && usedNames.stream().anyMatch(produced::contains);
-            if (usesProduced || isAssertionLike(s)) {
-                selected.add(s);
-                produced.addAll(definedBy(s));
+        for (Statement sibling : enclosingBlock.getStatements()) {
+            if (isReturnBreakThrow(sibling)) {
+                selected.add(sibling);
             }
         }
 
-        // Capture enclosing control structures.
-        Node ctxNode = callStmt;
-        while (ctxNode != null) {
-            ctxNode = ctxNode.getParentNode().orElse(null);
-            if (ctxNode == null || ctxNode == body) break;
-            if (ctxNode instanceof IfStmt || ctxNode instanceof WhileStmt
-                    || ctxNode instanceof ForStmt || ctxNode instanceof ForEachStmt) {
-                selected.add((Statement) ctxNode);
-            }
+        // Serialize the selected statements as a block.
+        StringBuilder result = new StringBuilder(signatureLine).append(" {");
+        for (Statement s : selected) {
+            result.append("\n        ").append(s.toString());
         }
+        result.append("\n    }");
+        return result.toString();
+    }
 
-        // Render the selected statements.
-        List<String> renderedLines = new ArrayList<>();
-        renderedLines.add(signatureLine + " {");
-        List<Statement> ordered = new ArrayList<>(selected);
-        ordered.sort(Comparator.comparingInt(st -> st.getBegin().get().line));
-        Statement prev = null;
-        Set<Integer> emittedLines = new HashSet<>();
-        for (Statement s : ordered) {
-            int begLine = s.getBegin().get().line;
-            int endLine = s.getEnd().get().line;
-            if (begLine == endLine && emittedLines.contains(begLine)) continue;
-            if (prev != null && begLine > prev.getEnd().get().line + 1) {
-                renderedLines.add("    // ...");
-            }
-            String code = entry.rawLines.get(begLine - 1);
-            if (!code.trim().endsWith("{")) code = code + " {";
-            renderedLines.add(code);
-            for (int ln = begLine; ln <= endLine; ln++) emittedLines.add(ln);
-            prev = s;
-        }
-        renderedLines.add("}");
-        return String.join("\n", renderedLines);
+    private boolean isReturnBreakThrow(Statement s) {
+        return s.isReturnStmt() || s.isBreakStmt() || s.isThrowStmt();
     }
 
     /**
