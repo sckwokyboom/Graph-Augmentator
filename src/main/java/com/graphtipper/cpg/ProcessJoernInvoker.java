@@ -82,11 +82,34 @@ public final class ProcessJoernInvoker implements JoernInvoker {
     }
 
     private String resolveBinary(String name) {
+        // Joern's launcher is a shell script on Unix (`javasrc2cpg`, sometimes `.sh`)
+        // and a batch script on Windows (`javasrc2cpg.bat`, occasionally `.cmd`).
+        // Java's ProcessBuilder on Windows calls CreateProcess directly and does
+        // *not* consult PATHEXT for .bat/.cmd — passing the bare name fails with
+        // "CreateProcess error=2" even when the .bat is on PATH. So on Windows
+        // we resolve the full filename ourselves, both from --joern-home and PATH.
+        boolean windows = System.getProperty("os.name", "").toLowerCase().startsWith("windows");
+        String[] suffixes = windows
+                ? new String[] {".bat", ".cmd", ".exe", ""}
+                : new String[] {"", ".sh"};
+
         if (joernHome != null) {
-            Path p = joernHome.resolve(name);
-            if (Files.exists(p)) return p.toString();
-            p = joernHome.resolve(name + ".sh");
-            if (Files.exists(p)) return p.toString();
+            for (String s : suffixes) {
+                Path p = joernHome.resolve(name + s);
+                if (Files.isRegularFile(p)) return p.toString();
+            }
+        } else if (windows) {
+            String pathEnv = System.getenv("PATH");
+            if (pathEnv != null) {
+                for (String dir : pathEnv.split(java.io.File.pathSeparator)) {
+                    if (dir.isEmpty()) continue;
+                    Path d = Paths.get(dir);
+                    for (String s : suffixes) {
+                        Path p = d.resolve(name + s);
+                        if (Files.isRegularFile(p)) return p.toString();
+                    }
+                }
+            }
         }
         return name;
     }

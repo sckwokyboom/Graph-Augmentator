@@ -26,15 +26,28 @@ reserved slots for V2 negative-memory).
    If you don't have it: `brew install openjdk@21` (macOS) or
    `sdk install java 21.0.4-tem` (SDKMAN).
 
-2. **Joern** on PATH (binaries `javasrc2cpg` and `joern-export`). Install via
-   the bundled helper:
+2. **Joern** on PATH (binaries `javasrc2cpg` and `joern`).
+
+   **macOS / Linux** — install via the bundled helper:
    ```
    bash tools/install-joern.sh
    ```
-   Or follow the official guide at https://docs.joern.io/installation. Verify:
+
+   **Windows** — Joern's official installer is bash-only. Either:
+   - Download the latest `joern-cli.zip` from
+     https://github.com/joernio/joern/releases/latest, extract it, and add the
+     resulting `joern-cli\` folder (the one containing `javasrc2cpg.bat`) to
+     your `PATH`; or
+   - Install via [Scoop](https://scoop.sh):
+     `scoop bucket add joernio https://github.com/joernio/joern.git && scoop install joern`.
+
+   Alternatively, skip `PATH` setup and point graph-tipper at the install
+   directory with `--joern-home C:\path\to\joern-cli`.
+
+   Verify:
    ```
-   javasrc2cpg --version
-   joern-export --help | head -3
+   javasrc2cpg --version          # Unix
+   javasrc2cpg.bat --version      # Windows
    ```
 
 ---
@@ -47,11 +60,18 @@ From the repository root:
 ./gradlew installDist
 ```
 
-This produces a launcher at `build/install/graph-tipper/bin/graph-tipper`.
-Optional: add it to PATH for convenience.
+This produces a launcher at `build/install/graph-tipper/bin/graph-tipper`
+(plus `graph-tipper.bat` on Windows). Optional: add it to PATH for convenience.
 
 ```
+# macOS / Linux
 export PATH="$PWD/build/install/graph-tipper/bin:$PATH"
+graph-tipper --help
+```
+
+```powershell
+# Windows (PowerShell)
+$env:Path = "$PWD\build\install\graph-tipper\bin;$env:Path"
 graph-tipper --help
 ```
 
@@ -213,6 +233,12 @@ body + top-1 chain alone exceed the budget. Raise `--budget-tokens`.
 **Joern fails on the project** — `javasrc2cpg` is source-only and stumbles on
 some unusual generic/lambda shapes. As a workaround, try `--no-cache` to
 force a rebuild. The jimple-based (bytecode) fallback is on the V2 roadmap.
+
+**`CreateProcess error=2, The system cannot find the file specified`
+(Windows)** — graph-tipper could not find `javasrc2cpg.bat` or `joern.bat`.
+Confirm `javasrc2cpg.bat --version` runs in the same shell. If Joern is
+installed but not on `PATH`, pass `--joern-home C:\path\to\joern-cli`
+(the directory that contains the `.bat` launchers).
 
 ---
 
