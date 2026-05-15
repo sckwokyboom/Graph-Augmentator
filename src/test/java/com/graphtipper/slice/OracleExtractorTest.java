@@ -55,4 +55,27 @@ class OracleExtractorTest {
         assertThat(oracles.get(0)).isInstanceOfSatisfying(Oracle.Exception.class, e ->
             assertThat(e.type()).isEqualTo("IllegalArgumentException"));
     }
+
+    @Test
+    void extracts_try_catch_with_exact_message() {
+        var ex = new OracleExtractor();
+        var oracles = ex.extract(fixture("TryCatchTests.java"), "oraclefix.TryCatchTests.testTryCatchExactMessage");
+        assertThat(oracles).hasSize(1);
+        assertThat(oracles.get(0)).isInstanceOfSatisfying(Oracle.ExceptionMessage.class, e -> {
+            assertThat(e.type()).isEqualTo("IllegalArgumentException");
+            assertThat(e.kind()).isEqualTo(Oracle.MatchKind.EXACT);
+            assertThat(e.message()).isEqualTo("neg value: -1");
+        });
+    }
+
+    @Test
+    void extracts_try_catch_with_contains_message() {
+        var ex = new OracleExtractor();
+        var oracles = ex.extract(fixture("TryCatchTests.java"), "oraclefix.TryCatchTests.testTryCatchContainsMessage");
+        assertThat(oracles).hasSize(1);
+        assertThat(oracles.get(0)).isInstanceOfSatisfying(Oracle.ExceptionMessage.class, e -> {
+            assertThat(e.kind()).isEqualTo(Oracle.MatchKind.CONTAINS);
+            assertThat(e.message()).isEqualTo("neg");
+        });
+    }
 }

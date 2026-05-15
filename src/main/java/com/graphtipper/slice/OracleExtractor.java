@@ -30,12 +30,18 @@ public final class OracleExtractor {
         List<Oracle> out = new ArrayList<>();
         md.findAll(MethodCallExpr.class).forEach(call -> {
             String name = call.getNameAsString();
+            // Skip assertEquals inside try/catch catch clauses (let try/catch handler process them)
+            if (name.equals("assertEquals") && isInsideCatchClause(call)) {
+                return;
+            }
             switch (name) {
                 case "assertEquals" -> handleAssertEquals(call, out);
                 case "assertThrows" -> handleAssertThrows(call, out);
                 default -> { /* not yet handled */ }
             }
         });
+        // try/catch oracle extraction (run after MethodCallExpr scan to allow upgrade):
+        md.findAll(TryStmt.class).forEach(t -> handleTryCatch(t, out));
         return out.isEmpty() ? List.of(new Oracle.None()) : out;
     }
 
@@ -67,6 +73,58 @@ public final class OracleExtractor {
     private static boolean isLikelyLiteral(Expression e) {
         return e instanceof LiteralExpr
                 || e instanceof UnaryExpr u && u.getExpression() instanceof LiteralExpr;
+    }
+
+    private void handleTryCatch(TryStmt tryStmt, List<Oracle> out) {
+        for (CatchClause cc : tryStmt.getCatchClauses()) {
+            String typeName = simpleName(cc.getParameter().getType().asString());
+            String varName = cc.getParameter().getNameAsString();
+            // Search body for assertEquals(<literal>, e.getMessage()) or assertTrue(e.getMessage().contains(<literal>))
+            boolean found = false;
+            for (MethodCallExpr call : cc.getBody().findAll(MethodCallExpr.class)) {
+                String name = call.getNameAsString();
+                var args = call.getArguments();
+                if (name.equals("assertEquals") && args.size() >= 2) {
+                    // (expected, actual) — actual should be e.getMessage()
+                    if (isGetMessageOn(args.get(1), varName) && args.get(0) instanceof StringLiteralExpr s) {
+                        out.add(new Oracle.ExceptionMessage(typeName, Oracle.MatchKind.EXACT, s.asString()));
+                        found = true;
+                        break;
+                    }
+                    if (isGetMessageOn(args.get(0), varName) && args.get(1) instanceof StringLiteralExpr s) {
+                        out.add(new Oracle.ExceptionMessage(typeName, Oracle.MatchKind.EXACT, s.asString()));
+                        found = true;
+                        break;
+                    }
+                }
+                if (name.equals("assertTrue") && !args.isEmpty()) {
+                    // assertTrue(e.getMessage().contains("..."))
+                    if (args.get(0) instanceof MethodCallExpr inner
+                            && inner.getNameAsString().equals("contains")
+                            && inner.getScope().isPresent()
+                            && isGetMessageOn(inner.getScope().get(), varName)
+                            && !inner.getArguments().isEmpty()
+                            && inner.getArgument(0) instanceof StringLiteralExpr s) {
+                        out.add(new Oracle.ExceptionMessage(typeName, Oracle.MatchKind.CONTAINS, s.asString()));
+                        found = true;
+                        break;
+                    }
+                }
+            }
+            if (!found) {
+                out.add(new Oracle.Exception(typeName));
+            }
+        }
+    }
+
+    private static boolean isGetMessageOn(Expression expr, String varName) {
+        return expr instanceof MethodCallExpr mc
+                && mc.getNameAsString().equals("getMessage")
+                && mc.getScope().filter(s -> s.toString().equals(varName)).isPresent();
+    }
+
+    private static boolean isInsideCatchClause(MethodCallExpr call) {
+        return call.findAncestor(CatchClause.class).isPresent();
     }
 
     private static String simpleName(String typeName) {
