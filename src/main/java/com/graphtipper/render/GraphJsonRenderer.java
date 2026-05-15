@@ -145,14 +145,6 @@ public final class GraphJsonRenderer {
             ArrayNode sigs = un.putArray("public_method_signatures");
             for (String sig : u.publicMethodSignatures()) sigs.add(sig);
         }
-        ArrayNode prod = lc.putArray("production_call_sites");
-        for (var p : a.localContext().productionCallSites()) {
-            ObjectNode pn = prod.addObject();
-            pn.put("caller_fqn", p.callerFqn());
-            pn.put("file", p.file());
-            pn.put("line", p.line());
-            pn.put("snippet", p.snippet());
-        }
 
         ObjectNode stats = root.putObject("stats");
         stats.put("total_chains", a.chains().size());

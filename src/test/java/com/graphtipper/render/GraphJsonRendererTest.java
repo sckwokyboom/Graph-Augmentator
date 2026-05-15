@@ -34,7 +34,7 @@ class GraphJsonRendererTest {
     void emitsSchemaVersionTargetAndStatsForEmptyChains() throws Exception {
         var target = method("m:p.C.target", "p.C.target", "src/main/java/p/C.java", 5, false);
         var artifact = new Artifact(target, "public void target() { }",
-                List.<Chain>of(), false, new LocalContext(List.of(), List.of(), List.of()));
+                List.<Chain>of(), false, new LocalContext(List.of(), List.of()));
         String out = new GraphJsonRenderer().render(artifact, graphOf(target), "proj-key", "p");
 
         JsonNode root = new ObjectMapper().readTree(out);
@@ -63,7 +63,7 @@ class GraphJsonRendererTest {
                         "src/test/java/p/T.java", 11, 9, "target(1)"));
         var artifact = new Artifact(target, "body",
                 List.of(new Chain(t1, List.of(step), 0)),
-                false, new LocalContext(List.of(), List.of(), List.of()));
+                false, new LocalContext(List.of(), List.of()));
 
         var root = new ObjectMapper().readTree(
                 new GraphJsonRenderer().render(artifact, graphOf(target, t1), "k", "p"));
@@ -106,7 +106,7 @@ class GraphJsonRendererTest {
         var chainA = new Chain(t1, List.of(stepT1ToHelper, stepHelperToTarget), 0);
         var chainB = new Chain(t2, List.of(stepT2ToHelper, stepHelperToTarget), 0);
         var artifact = new Artifact(target, "body", List.of(chainA, chainB), false,
-                new LocalContext(List.of(), List.of(), List.of()));
+                new LocalContext(List.of(), List.of()));
 
         var root = new ObjectMapper().readTree(
                 new GraphJsonRenderer().render(artifact, graphOf(target, t1, t2, mid), "k", "p"));
@@ -135,7 +135,7 @@ class GraphJsonRendererTest {
                 .withCallSite(new CallStep.CallSite("src/test/java/p/T.java", 11, 9, "target()"));
         var artifact = new Artifact(target, "body",
                 List.of(new Chain(t1, List.of(step), 0)),
-                false, new LocalContext(List.of(), List.of(), List.of()));
+                false, new LocalContext(List.of(), List.of()));
         String doc = new GraphJsonRenderer().render(artifact, graphOf(target, t1), "k", "p");
 
         var factory = com.networknt.schema.JsonSchemaFactory.getInstance(

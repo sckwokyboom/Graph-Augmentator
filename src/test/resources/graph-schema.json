@@ -109,11 +109,10 @@
     },
     "local_context": {
       "type": "object",
-      "required": ["siblings", "used_types", "production_call_sites"],
+      "required": ["siblings", "used_types"],
       "properties": {
         "siblings": { "type": "array" },
-        "used_types": { "type": "array" },
-        "production_call_sites": { "type": "array" }
+        "used_types": { "type": "array" }
       }
     },
     "stats": {

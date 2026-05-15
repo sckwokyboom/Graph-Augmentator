@@ -21,7 +21,7 @@ class MarkdownRendererTest {
                 false, "  target();", List.of());
         var chain = new Chain(test, List.of(step), 0);
         var artifact = new Artifact(target, "return null;", List.of(chain), false,
-                new LocalContext(List.of(), List.of(), List.of()));
+                new LocalContext(List.of(), List.of()));
 
         var budget = new TokenBudget(20_000);
         budget.tryAdd("seed");
@@ -45,7 +45,7 @@ class MarkdownRendererTest {
         var g = Gb.graph().method("p.C.target").done().build();
         var target = (Node.Method) g.byFqn("p.C.target").get(0);
         var artifact = new Artifact(target, "", List.of(), false,
-                new LocalContext(List.of(), List.of(), List.of()));
+                new LocalContext(List.of(), List.of()));
         var md = new MarkdownRenderer().render(artifact, new TokenBudget(20_000), "h", "proj");
         assertThat(md).contains("No tests transitively reach this target");
     }
@@ -66,7 +66,7 @@ class MarkdownRendererTest {
         var step = new CallStep(test.id(), "p.T.t1", target.id(), "p.C.target",
                 false, "  target();", origins);
         var artifact = new Artifact(target, "", List.of(new Chain(test, List.of(step), 0)), false,
-                new LocalContext(List.of(), List.of(), List.of()));
+                new LocalContext(List.of(), List.of()));
         var md = new MarkdownRenderer().render(artifact, new TokenBudget(20_000), "h", "p");
         // Each non-literal line should not end with ")"
         assertThat(md).contains("parameter `x:int`\n");
@@ -90,7 +90,7 @@ class MarkdownRendererTest {
         var step = new CallStep(test.id(), "p.T.t1", target.id(), "p.C.target",
                 false, "  target(v);", origins);
         var artifact = new Artifact(target, "", List.of(new Chain(test, List.of(step), 0)), false,
-                new LocalContext(List.of(), List.of(), List.of()));
+                new LocalContext(List.of(), List.of()));
         var md = new MarkdownRenderer().render(artifact, new TokenBudget(20_000), "h", "p");
         assertThat(md).contains("local `v`");
         assertThat(md).contains("line 17");

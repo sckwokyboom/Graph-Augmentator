@@ -38,7 +38,7 @@ public final class BudgetPlanner {
         }
 
         cur = new Artifact(cur.target(), cur.currentBody(), cur.chains(), cur.truncated(),
-                new LocalContext(cur.localContext().siblings(), cur.localContext().usedTypes(), List.of()));
+                new LocalContext(cur.localContext().siblings(), cur.localContext().usedTypes()));
         budget.recordEviction("production-call-sites");
         if (estimateTotal(cur) <= budget.max()) { charge(cur); return cur; }
 
@@ -51,7 +51,7 @@ public final class BudgetPlanner {
                     s.signature(), s.javadoc(), "// truncated", true));
         }
         cur = new Artifact(cur.target(), cur.currentBody(), cur.chains(), cur.truncated(),
-                new LocalContext(truncSiblings, cur.localContext().usedTypes(), cur.localContext().productionCallSites()));
+                new LocalContext(truncSiblings, cur.localContext().usedTypes()));
         budget.recordEviction("sibling-bodies");
         if (estimateTotal(cur) <= budget.max()) { charge(cur); return cur; }
 
@@ -115,7 +115,6 @@ public final class BudgetPlanner {
             for (String sig : u.publicMethodSignatures()) sb.append(sig);
             if (u.type().enumConstants() != null) for (String c : u.type().enumConstants()) sb.append(c);
         }
-        for (var p : a.localContext().productionCallSites()) sb.append(p.snippet());
         return budget.estimate(sb.toString());
     }
 
@@ -135,6 +134,5 @@ public final class BudgetPlanner {
                 budget.tryAdd(String.join("", u.type().enumConstants()));
             }
         }
-        for (var p : a.localContext().productionCallSites()) budget.tryAdd(p.snippet());
     }
 }

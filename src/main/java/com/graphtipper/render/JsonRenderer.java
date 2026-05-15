@@ -94,14 +94,6 @@ public final class JsonRenderer {
             ArrayNode sigs = un.putArray("publicMethodSignatures");
             for (String s : u.publicMethodSignatures()) sigs.add(s);
         }
-        ArrayNode prod = lc.putArray("productionCallSites");
-        for (var p : a.localContext().productionCallSites()) {
-            ObjectNode pn = prod.addObject();
-            pn.put("callerFqn", p.callerFqn());
-            pn.put("file", p.file());
-            pn.put("line", p.line());
-            pn.put("snippet", p.snippet());
-        }
 
         ObjectNode bud = root.putObject("budget");
         bud.put("tokensUsed", budget.used());

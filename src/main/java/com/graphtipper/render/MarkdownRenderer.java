@@ -161,15 +161,5 @@ public final class MarkdownRenderer {
                 sb.append("\n");
             }
         }
-        if (!lc.productionCallSites().isEmpty()) {
-            sb.append("### Production call-sites of target (non-test, up to 5)\n");
-            for (var p : lc.productionCallSites()) {
-                sb.append("- `").append(p.callerFqn()).append("` — `").append(p.file()).append(":").append(p.line()).append("`\n");
-                if (p.snippet() != null && !p.snippet().isBlank()) {
-                    sb.append("  ```java\n  ").append(p.snippet()).append("\n  ```\n");
-                }
-            }
-            sb.append("\n");
-        }
     }
 }

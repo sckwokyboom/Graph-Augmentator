@@ -13,7 +13,7 @@ class BudgetPlannerTest {
     void protectsMinimumWhenBudgetTight() {
         var g = Gb.graph().method("p.C.target").done().buildRaw();
         var target = (Node.Method) g.byFqn("p.C.target").get(0);
-        var ctx = new LocalContext(List.of(), List.of(), List.of());
+        var ctx = new LocalContext(List.of(), List.of());
         var artifact = new Artifact(target, "return null;", List.of(), false, ctx);
 
         var budget = new TokenBudget(10_000);
@@ -26,24 +26,14 @@ class BudgetPlannerTest {
 
     @Test
     void evictsProductionCallSitesFirstWhenOverBudget() {
-        var g = Gb.graph().method("p.C.target").done().buildRaw();
-        var target = (Node.Method) g.byFqn("p.C.target").get(0);
-        var bigProd = new LocalContext.ProductionCallSite("a", "f", 1, "x".repeat(800));
-        var ctx = new LocalContext(List.of(), List.of(), List.of(bigProd, bigProd, bigProd));
-        var artifact = new Artifact(target, "", List.of(), false, ctx);
-
-        var budget = new TokenBudget(150);   // tight
-        var planned = new BudgetPlanner(budget).plan(artifact);
-
-        assertThat(planned.localContext().productionCallSites()).isEmpty();
-        assertThat(budget.evicted()).contains("production-call-sites");
+        // productionCallSites moved to Artifact.consumers (see ConsumerDeriver); LocalContext no longer carries them.
     }
 
     @Test
     void throwsWhenMinimumDoesNotFit() {
         var g = Gb.graph().method("p.C.target").done().buildRaw();
         var target = (Node.Method) g.byFqn("p.C.target").get(0);
-        var ctx = new LocalContext(List.of(), List.of(), List.of());
+        var ctx = new LocalContext(List.of(), List.of());
         var giantBody = "x".repeat(5000);
         var artifact = new Artifact(target, giantBody, List.of(), false, ctx);
 

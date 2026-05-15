@@ -22,7 +22,7 @@ class JsonRendererTest {
         var step = new CallStep(test.id(), "p.T.t1", target.id(), "p.C.target",
                 false, "  target();", List.of());
         var artifact = new Artifact(target, "return null;", List.of(new Chain(test, List.of(step), 0)),
-                false, new LocalContext(List.of(), List.of(), List.of()));
+                false, new LocalContext(List.of(), List.of()));
 
         var budget = new TokenBudget(20_000);
         budget.tryAdd("x");

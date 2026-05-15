@@ -13,8 +13,7 @@ public final class LocalContextExtractor {
     public LocalContext extract(ProjectGraph g, Node.Method target) {
         List<LocalContext.SiblingMember> siblings = collectSiblings(g, target);
         List<LocalContext.UsedType> used = collectUsedTypes(g, target);
-        List<LocalContext.ProductionCallSite> prod = collectProductionCallSites(g, target);
-        return new LocalContext(siblings, used, prod);
+        return new LocalContext(siblings, used);
     }
 
     private List<LocalContext.SiblingMember> collectSiblings(ProjectGraph g, Node.Method target) {
@@ -107,27 +106,6 @@ public final class LocalContextExtractor {
         return sigs;
     }
 
-    private List<LocalContext.ProductionCallSite> collectProductionCallSites(ProjectGraph g, Node.Method target) {
-        var out = new ArrayList<LocalContext.ProductionCallSite>();
-        for (Edge.Calls in : g.incomingCalls(target.id())) {
-            if (!(g.byId(in.fromId()) instanceof Node.Method caller)) continue;
-            if (caller.isTest()) continue;
-            // best-effort line — find a callsite node if any
-            int line = -1;
-            String snippet = "";
-            for (Node n : g.allNodes()) {
-                if (n instanceof Node.CallSite cs && cs.inMethodId().equals(caller.id())
-                        && cs.calleeFqn().equals(target.fqn())) {
-                    line = cs.line();
-                    snippet = cs.codeSnippet();
-                    break;
-                }
-            }
-            out.add(new LocalContext.ProductionCallSite(caller.fqn(), caller.file(), line, snippet));
-            if (out.size() >= 5) break;
-        }
-        return out;
-    }
 
     private String ownerClassFqn(Node.Method m) {
         int dot = m.fqn().lastIndexOf('.');
