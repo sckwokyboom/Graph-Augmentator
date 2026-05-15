@@ -183,4 +183,23 @@ class AstSnippetExtractorTest {
         String slice = ex.sliceConsumerBody(fixture, "consumerfix.SimpleConsumer.noSuchMethod", "target");
         assertThat(slice).isNull();
     }
+
+    @Test
+    void sliceTestMethodRelevantRegion_returns_full_body_when_short() {
+        var ex = new AstSnippetExtractor();
+        var fixture = java.nio.file.Paths.get("src/test/resources/oracle-fixtures/AssertEqualsTests.java");
+        String slice = ex.sliceTestMethodRelevantRegion(
+                fixture, "oraclefix.AssertEqualsTests.testReturnEquals");
+        assertThat(slice).contains("void testReturnEquals()");
+        assertThat(slice).contains("assertEquals(42, x)");
+        assertThat(slice).contains("int x = foo()");
+    }
+
+    @Test
+    void sliceTestMethodRelevantRegion_returns_null_when_method_not_found() {
+        var ex = new AstSnippetExtractor();
+        var fixture = java.nio.file.Paths.get("src/test/resources/oracle-fixtures/AssertEqualsTests.java");
+        String slice = ex.sliceTestMethodRelevantRegion(fixture, "oraclefix.AssertEqualsTests.noSuchTest");
+        assertThat(slice).isNull();
+    }
 }

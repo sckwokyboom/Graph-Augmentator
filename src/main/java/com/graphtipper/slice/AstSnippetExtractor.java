@@ -611,6 +611,46 @@ public final class AstSnippetExtractor {
     }
 
     /**
+     * Slice a test method to its relevant region for artifact §4.3 / §4.5 primary representative.
+     * If the test method body has ≤ 20 statements → full body (with signature line).
+     * Otherwise → signature line + only the statements that:
+     *   (a) data-flow into any assertion's actual-expression, or
+     *   (b) define a local variable that data-flows into the entry-point call, or
+     *   (c) are the assertion statement itself.
+     *
+     * V1 implementation: returns full body up to a 20-statement cap; if exceeded,
+     * returns the trailing 20 statements (heuristically the assertion-containing tail).
+     *
+     * @return the slice, or null if the method is not found.
+     */
+    public String sliceTestMethodRelevantRegion(java.nio.file.Path file, String methodFqn) {
+        CacheEntry entry = load(file);
+        if (entry == null || !entry.parseOk) return null;
+        CompilationUnit cu = entry.cu;
+        var methodOpt = findMethodByFqn(cu, methodFqn);
+        if (methodOpt.isEmpty()) return null;
+        var md = methodOpt.get();
+        if (md.getBody().isEmpty()) return null;
+        var body = md.getBody().get();
+        String signatureLine = md.getDeclarationAsString(false, false, false);
+
+        long stmtCount = body.findAll(Statement.class).size();
+        if (stmtCount <= 20) {
+            return signatureLine + " " + body.toString();
+        }
+        // Heuristic tail-slice: keep last ~20 statements.
+        var stmts = body.getStatements();
+        int keep = Math.min(stmts.size(), 20);
+        var sb = new StringBuilder();
+        sb.append(signatureLine).append(" {\n");
+        for (int i = stmts.size() - keep; i < stmts.size(); i++) {
+            sb.append("    ").append(stmts.get(i).toString().replace("\n", "\n    ")).append("\n");
+        }
+        sb.append("}");
+        return sb.toString();
+    }
+
+    /**
      * Look up a method declaration by fully qualified name within a CompilationUnit.
      * The FQN format is "package.ClassName.methodName" or "package.OuterClass.InnerClass.methodName".
      */
