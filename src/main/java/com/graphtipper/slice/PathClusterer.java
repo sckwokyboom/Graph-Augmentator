@@ -21,6 +21,7 @@ import java.util.Map;
 public final class PathClusterer {
 
     public List<PathCluster> cluster(List<Chain> chains, String targetFqn) {
+        // targetFqn is reserved for future validation of chain terminal node; currently unused.
         // signature -> accumulator with entryPoint, consumer, depth, and source-chain list
         Map<PathSignature, Accumulator> acc = new LinkedHashMap<>();
         for (Chain c : chains) {
@@ -55,6 +56,7 @@ public final class PathClusterer {
         final String entryPoint;
         final String immediateConsumer;
         final int depth;
+        // Cached during accumulation to avoid re-scanning all chains when building stubs.
         final List<Chain> sourceChains = new ArrayList<>();
         Accumulator(String e, String c, int d) { entryPoint = e; immediateConsumer = c; depth = d; }
     }

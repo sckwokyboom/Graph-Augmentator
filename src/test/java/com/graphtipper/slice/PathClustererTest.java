@@ -93,4 +93,22 @@ class PathClustererTest {
         // Direct tests (depth=1) should be filtered out.
         assertThat(clusters).isEmpty();
     }
+
+    @Test
+    void clusterer_sorts_clusters_by_chain_count_desc() {
+        var target = "T.target";
+        var chains = List.of(
+            chain("Test.a", "X.entry", "C.consumer", target),
+            chain("Test.b", "X.entry", "C.consumer", target),
+            chain("Test.c", "X.entry", "C.consumer", target),
+            chain("Test.d", "Y.entry", "C.consumer", target)
+        );
+        var clusters = new PathClusterer().cluster(chains, target);
+        assertThat(clusters).hasSize(2);
+        // Largest cluster first
+        assertThat(clusters.get(0).chainsCovered()).isEqualTo(3);
+        assertThat(clusters.get(0).entryPoint()).isEqualTo("X.entry");
+        assertThat(clusters.get(1).chainsCovered()).isEqualTo(1);
+        assertThat(clusters.get(1).entryPoint()).isEqualTo("Y.entry");
+    }
 }
