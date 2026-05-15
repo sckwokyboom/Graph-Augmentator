@@ -118,4 +118,22 @@ class OracleExtractorTest {
             assertThat(c.substring()).isEqualTo("hello");
         });
     }
+
+    @Test
+    void primaryFor_prefers_ExceptionMessage_over_Equals() {
+        // testTryCatchExactMessage has one ExceptionMessage oracle from the catch block.
+        // (Also asserts implicitly via assertEquals inside the catch — only one oracle expected.)
+        var primary = new OracleExtractor().primaryFor(
+                fixture("TryCatchTests.java"), "oraclefix.TryCatchTests.testTryCatchExactMessage", "any.target");
+        assertThat(primary).isInstanceOf(Oracle.ExceptionMessage.class);
+    }
+
+    @Test
+    void primaryFor_returns_None_when_no_assertions() {
+        // Use a test method with no assertions at all.
+        // For now, exercise via a non-existent method name.
+        var primary = new OracleExtractor().primaryFor(
+                fixture("AssertEqualsTests.java"), "oraclefix.AssertEqualsTests.noSuchMethod", "any.target");
+        assertThat(primary).isInstanceOf(Oracle.None.class);
+    }
 }

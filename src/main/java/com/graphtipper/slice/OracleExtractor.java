@@ -188,9 +188,27 @@ public final class OracleExtractor {
                 .findFirst();
     }
 
-    /** Primary-oracle heuristic — implemented in Task 7. */
+    /**
+     * Choose the oracle most semantically related to the target call.
+     * V1 heuristic: priority order
+     *   ExceptionMessage > Exception > Equals > Contains > Boolean > Nullability > None.
+     * (Data-flow-based heuristic deferred to v2.)
+     */
     public Oracle primaryFor(Path javaFile, String methodFqn, String targetFqn) {
         var all = extract(javaFile, methodFqn);
-        return all.isEmpty() ? new Oracle.None() : all.get(0);
+        if (all.isEmpty()) return new Oracle.None();
+        return all.stream().min((a, b) -> Integer.compare(priority(a), priority(b))).orElse(all.get(0));
+    }
+
+    private static int priority(Oracle o) {
+        return switch (o) {
+            case Oracle.ExceptionMessage __ -> 0;
+            case Oracle.Exception __ -> 1;
+            case Oracle.Equals __ -> 2;
+            case Oracle.Contains __ -> 3;
+            case Oracle.Boolean __ -> 4;
+            case Oracle.Nullability __ -> 5;
+            case Oracle.None __ -> 6;
+        };
     }
 }
