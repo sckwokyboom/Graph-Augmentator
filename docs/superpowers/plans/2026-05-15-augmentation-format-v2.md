@@ -1323,39 +1323,1037 @@ git commit -m "feat(render): ArgRenderer normalizes ArgOrigin to matrix cell str
 
 ---
 
-> **Plan continues in subsequent tasks (10–37).** The remaining tasks follow the same TDD pattern:
-> - Task 10: `UsageKind`, `ReturnValueUsage`, `ExceptionHandlingNearCall`, `ImpliedRequirement` records.
-> - Task 11: `ImpliedRequirementTemplates` constant table + tests.
-> - Task 12: `ConsumerContract` record.
-> - Task 13: `DirectTest` record.
-> - Task 14: `AstSnippetExtractor.sliceConsumerBody` mode.
-> - Task 15: `AstSnippetExtractor.sliceTestMethodRelevantRegion` mode.
-> - Task 16: `ConsumerDeriver.classifyReturnValueUsage` (AST-derived `UsageKind` set).
-> - Task 17: `ConsumerDeriver.classifyExceptionHandling`.
-> - Task 18: `ConsumerDeriver.derive` end-to-end (assemble `ConsumerContract`s from clusters + body slice + implications).
-> - Task 19: `ClusterEnricher` — populate `ClusterMember.argsAtTarget` (from chain's last `CallStep.argOrigins`) and `oracle` (via `OracleExtractor.primaryFor`).
-> - Task 20: `DifferentialAnalyzer` — `argN_invariant_in_cluster` detector.
-> - Task 21: `DifferentialAnalyzer` — `argN_propagates_to_oracle` detector (min substring length 3).
-> - Task 22: `DifferentialAnalyzer` — `oracle_varies_only_with_argN`, `oracle_independent_of_target_args`, `exception_type_consistent_across_cluster`.
-> - Task 23: Extend `Artifact` record with `directTests`, `consumers`, `longTailSingletons` fields (keep existing fields).
-> - Task 24: Remove `productionCallSites` from `LocalContext`; update `LocalContextExtractor` accordingly; update its test.
-> - Task 25: `MarkdownRenderer.renderHeader` updated counters (consumers, clusters, direct tests, singletons).
-> - Task 26: `MarkdownRenderer.renderDirectTests` — Tier A table + test snippet for each.
-> - Task 27: `MarkdownRenderer.renderConsumerBlock` — header, body slice, return-value usage, exception handling, implied requirements.
-> - Task 28: `MarkdownRenderer.renderPathCluster` — path rendering with `methodName(×N)` compression, primary representative, differential matrix.
-> - Task 29: `MarkdownRenderer` — behavior-signal section + singleton compact rendering.
-> - Task 30: `MarkdownRenderer.renderLongTail` — one-liner with sidecar reference.
-> - Task 31: Delete `MarkdownRenderer.renderChains` and helpers; remove production-call-sites rendering from `renderLocalContext`.
-> - Task 32: `JsonRenderer` — bump `schemaVersion` to `"2.0"`, emit `directTests`, `consumers`, `clusters`, `longTail`; drop top-level `chains[]`.
-> - Task 33: `BudgetPlanner` — cluster-based eviction order per spec §7.2; new protected minimum.
-> - Task 34: `Main.java` — add `--consumer-cap`, `--cluster-cap`, `--cluster-coverage`, `--matrix-rows`, `--include-test-level-args` flags; wire orchestration through new pipeline.
-> - Task 35: `PicocliSmokeTest` — assert v2 artifact for `putValue` is ≤ 500 lines, contains exactly 1 consumer block, ≤ 10 cluster blocks, 2 direct tests.
-> - Task 36: Update `MarkdownRendererTest` for new sections; update `JsonRendererTest` for v2 schema; update `BudgetPlannerTest` for cluster-eviction order.
-> - Task 37: Final integration: run `./gradlew installDist test` on the project + manual smoke `graph-tipper --project /tmp/picocli --target ...` against picocli; verify the rendered artifact matches the structure in the spec.
+## Task 10: `UsageKind`, `ReturnValueUsage`, `ExceptionHandlingNearCall`, `ImpliedRequirement` records
 
-**Each of these tasks follows the same template as Tasks 1–9: write failing test, run to confirm failure, write minimal implementation, run to confirm pass, commit.** The detailed step bodies for Tasks 10–37 are deferred to the implementation session; the executing-plans skill (or subagent-driven-development) expands them as it works, since their step contents would otherwise inflate this document beyond useful length.
+**Files:**
+- Create: `src/main/java/com/graphtipper/slice/UsageKind.java`
+- Create: `src/main/java/com/graphtipper/slice/ReturnValueUsage.java`
+- Create: `src/main/java/com/graphtipper/slice/ExceptionHandlingNearCall.java`
+- Create: `src/main/java/com/graphtipper/slice/ImpliedRequirement.java`
+- Test: `src/test/java/com/graphtipper/slice/ConsumerDeriverTest.java` (created here, used later)
 
-When an implementing agent reaches the boundary at Task 10, the agent should: (a) read the spec section corresponding to the task's component, (b) write tests against the same patterns demonstrated in Tasks 1–9 (fixture file under `src/test/resources/`, JUnit5 + AssertJ, assertions on returned records), (c) implement minimally, (d) commit using a `feat(slice):` / `feat(render):` / `refactor:` prefix consistent with existing history.
+- [ ] **Step 1: Write the failing test**
+
+Create `src/test/java/com/graphtipper/slice/ConsumerDeriverTest.java`:
+
+```java
+package com.graphtipper.slice;
+
+import org.junit.jupiter.api.Test;
+import java.util.EnumSet;
+import java.util.List;
+import static org.assertj.core.api.Assertions.assertThat;
+
+class ConsumerDeriverTest {
+
+    @Test
+    void usageKind_values_match_spec() {
+        assertThat(UsageKind.values()).contains(
+            UsageKind.ASSIGNED_TO_LOCAL, UsageKind.ASSIGNED_TO_FIELD,
+            UsageKind.FIELD_READ, UsageKind.METHOD_CALL_ON_RESULT,
+            UsageKind.USED_IN_CONDITION, UsageKind.USED_IN_LOOP, UsageKind.USED_IN_INDEX_EXPR,
+            UsageKind.PASSED_AS_ARG, UsageKind.RETURNED_UNCHANGED, UsageKind.DISCARDED);
+    }
+
+    @Test
+    void returnValueUsage_constructs_with_kinds_and_fields() {
+        var usage = new ReturnValueUsage(
+            EnumSet.of(UsageKind.ASSIGNED_TO_LOCAL, UsageKind.FIELD_READ),
+            List.of("row", "column"));
+        assertThat(usage.kinds()).contains(UsageKind.ASSIGNED_TO_LOCAL);
+        assertThat(usage.fieldsRead()).containsExactly("row", "column");
+    }
+
+    @Test
+    void exceptionHandlingNearCall_distinguishes_try_catch_from_propagation() {
+        var noTry = new ExceptionHandlingNearCall(false, List.of());
+        var inTry = new ExceptionHandlingNearCall(true, List.of("IOException"));
+        assertThat(noTry.inTryCatch()).isFalse();
+        assertThat(inTry.caughtTypes()).containsExactly("IOException");
+    }
+
+    @Test
+    void impliedRequirement_carries_text() {
+        var req = new ImpliedRequirement("MUST return non-null");
+        assertThat(req.text()).isEqualTo("MUST return non-null");
+    }
+}
+```
+
+- [ ] **Step 2: Run test to verify it fails**
+
+Run: `./gradlew test --tests com.graphtipper.slice.ConsumerDeriverTest -q`
+Expected: compile failure — none of these types exist.
+
+- [ ] **Step 3: Write minimal implementations**
+
+Create `src/main/java/com/graphtipper/slice/UsageKind.java`:
+
+```java
+package com.graphtipper.slice;
+
+/**
+ * Classifications of how a method's return value is used by its caller's body.
+ * Detected by {@link ConsumerDeriver} via AST walk over the caller's method body
+ * starting from the call site to the target.
+ */
+public enum UsageKind {
+    ASSIGNED_TO_LOCAL,
+    ASSIGNED_TO_FIELD,
+    FIELD_READ,
+    METHOD_CALL_ON_RESULT,
+    USED_IN_CONDITION,
+    USED_IN_LOOP,
+    USED_IN_INDEX_EXPR,
+    PASSED_AS_ARG,
+    RETURNED_UNCHANGED,
+    DISCARDED
+}
+```
+
+Create `src/main/java/com/graphtipper/slice/ReturnValueUsage.java`:
+
+```java
+package com.graphtipper.slice;
+
+import java.util.EnumSet;
+import java.util.List;
+
+/**
+ * AST-derived summary of how the target's return value is used at a consumer's call site.
+ * {@code kinds} is the set of patterns observed; {@code fieldsRead} lists field identifiers
+ * read off the result (e.g., {@code cell.row}, {@code cell.column}).
+ */
+public record ReturnValueUsage(EnumSet<UsageKind> kinds, List<String> fieldsRead) {
+    public ReturnValueUsage {
+        kinds = EnumSet.copyOf(kinds);
+        fieldsRead = List.copyOf(fieldsRead);
+    }
+    public static ReturnValueUsage empty() {
+        return new ReturnValueUsage(EnumSet.noneOf(UsageKind.class), List.of());
+    }
+}
+```
+
+Create `src/main/java/com/graphtipper/slice/ExceptionHandlingNearCall.java`:
+
+```java
+package com.graphtipper.slice;
+
+import java.util.List;
+
+/**
+ * Whether the target call sits inside a try/catch in the consumer, and which types are caught.
+ * Empty {@code caughtTypes} with {@code inTryCatch=false} means exceptions propagate as-is.
+ */
+public record ExceptionHandlingNearCall(boolean inTryCatch, List<String> caughtTypes) {
+    public ExceptionHandlingNearCall {
+        caughtTypes = List.copyOf(caughtTypes);
+    }
+    public static ExceptionHandlingNearCall none() {
+        return new ExceptionHandlingNearCall(false, List.of());
+    }
+}
+```
+
+Create `src/main/java/com/graphtipper/slice/ImpliedRequirement.java`:
+
+```java
+package com.graphtipper.slice;
+
+/**
+ * A short human-readable requirement on the target derived from AST observations
+ * about how its consumer uses it. Produced by {@link ImpliedRequirementTemplates}.
+ */
+public record ImpliedRequirement(String text) {}
+```
+
+- [ ] **Step 4: Run test to verify it passes**
+
+Run: `./gradlew test --tests com.graphtipper.slice.ConsumerDeriverTest -q`
+Expected: 4 tests pass.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add src/main/java/com/graphtipper/slice/UsageKind.java \
+        src/main/java/com/graphtipper/slice/ReturnValueUsage.java \
+        src/main/java/com/graphtipper/slice/ExceptionHandlingNearCall.java \
+        src/main/java/com/graphtipper/slice/ImpliedRequirement.java \
+        src/test/java/com/graphtipper/slice/ConsumerDeriverTest.java
+git commit -m "feat(slice): UsageKind enum + Return/Exception/Implied records"
+```
+
+---
+
+## Task 11: `ImpliedRequirementTemplates` constant table
+
+**Files:**
+- Create: `src/main/java/com/graphtipper/slice/ImpliedRequirementTemplates.java`
+- Test: extend `ConsumerDeriverTest.java`
+
+- [ ] **Step 1: Write the failing test**
+
+Append to `ConsumerDeriverTest.java`:
+
+```java
+    @Test
+    void templates_map_field_read_to_non_null_requirement() {
+        var usage = new ReturnValueUsage(EnumSet.of(UsageKind.FIELD_READ), List.of("row"));
+        var reqs = ImpliedRequirementTemplates.derive(usage, ExceptionHandlingNearCall.none());
+        assertThat(reqs).extracting(ImpliedRequirement::text)
+                .anyMatch(t -> t.contains("MUST return non-null"));
+    }
+
+    @Test
+    void templates_map_condition_to_control_flow_requirement() {
+        var usage = new ReturnValueUsage(
+            EnumSet.of(UsageKind.USED_IN_CONDITION, UsageKind.FIELD_READ),
+            List.of("row"));
+        var reqs = ImpliedRequirementTemplates.derive(usage, ExceptionHandlingNearCall.none());
+        assertThat(reqs).extracting(ImpliedRequirement::text)
+                .anyMatch(t -> t.contains("control flow"));
+    }
+
+    @Test
+    void templates_map_returned_unchanged_to_pass_through_note() {
+        var usage = new ReturnValueUsage(EnumSet.of(UsageKind.RETURNED_UNCHANGED), List.of());
+        var reqs = ImpliedRequirementTemplates.derive(usage, ExceptionHandlingNearCall.none());
+        assertThat(reqs).extracting(ImpliedRequirement::text)
+                .anyMatch(t -> t.contains("forwards target's return"));
+    }
+
+    @Test
+    void templates_emit_propagation_note_when_no_try_catch() {
+        var reqs = ImpliedRequirementTemplates.derive(
+            ReturnValueUsage.empty(), ExceptionHandlingNearCall.none());
+        assertThat(reqs).extracting(ImpliedRequirement::text)
+                .anyMatch(t -> t.contains("exceptions propagate"));
+    }
+
+    @Test
+    void templates_emit_caught_types_when_try_catch_present() {
+        var reqs = ImpliedRequirementTemplates.derive(
+            ReturnValueUsage.empty(),
+            new ExceptionHandlingNearCall(true, List.of("IOException")));
+        assertThat(reqs).extracting(ImpliedRequirement::text)
+                .anyMatch(t -> t.contains("IOException"));
+    }
+```
+
+- [ ] **Step 2: Run test to verify it fails**
+
+Run: `./gradlew test --tests com.graphtipper.slice.ConsumerDeriverTest -q`
+Expected: compile failure — `ImpliedRequirementTemplates` not found.
+
+- [ ] **Step 3: Write minimal implementation**
+
+Create `src/main/java/com/graphtipper/slice/ImpliedRequirementTemplates.java`:
+
+```java
+package com.graphtipper.slice;
+
+import java.util.ArrayList;
+import java.util.List;
+
+/**
+ * Constant-table mapping from {@link UsageKind} patterns + {@link ExceptionHandlingNearCall}
+ * to short, template-based {@link ImpliedRequirement}s. Strict 1:1 mapping; no interpretation
+ * beyond what AST observes. New patterns are added by extending this table — never via LLM.
+ */
+public final class ImpliedRequirementTemplates {
+
+    private ImpliedRequirementTemplates() {}
+
+    public static List<ImpliedRequirement> derive(
+            ReturnValueUsage usage, ExceptionHandlingNearCall ex) {
+        var out = new ArrayList<ImpliedRequirement>();
+
+        if (usage.kinds().contains(UsageKind.FIELD_READ)
+                || usage.kinds().contains(UsageKind.METHOD_CALL_ON_RESULT)) {
+            String fields = usage.fieldsRead().isEmpty()
+                    ? "the result"
+                    : "`" + String.join("`, `", usage.fieldsRead()) + "`";
+            out.add(new ImpliedRequirement(
+                    "MUST return non-null (else NPE on " + fields + ")"));
+        }
+
+        if (!usage.fieldsRead().isEmpty()) {
+            out.add(new ImpliedRequirement(
+                    "Returned object's fields are observed by caller (not opaque): "
+                            + String.join(", ", usage.fieldsRead())));
+        }
+
+        if (usage.kinds().contains(UsageKind.USED_IN_CONDITION)
+                || usage.kinds().contains(UsageKind.USED_IN_LOOP)) {
+            out.add(new ImpliedRequirement(
+                    "Return value participates in caller's control flow"));
+        }
+
+        if (usage.kinds().contains(UsageKind.RETURNED_UNCHANGED)) {
+            out.add(new ImpliedRequirement(
+                    "Caller forwards target's return value; target's behavior is the caller's "
+                            + "behavior on this path"));
+        }
+
+        if (usage.kinds().contains(UsageKind.PASSED_AS_ARG)) {
+            out.add(new ImpliedRequirement(
+                    "Return value is passed to another method; downstream usage may impose further constraints"));
+        }
+
+        if (usage.kinds().contains(UsageKind.DISCARDED) && usage.kinds().size() == 1) {
+            out.add(new ImpliedRequirement(
+                    "Caller discards return value; only side effects of target are observed"));
+        }
+
+        if (ex.inTryCatch()) {
+            out.add(new ImpliedRequirement(
+                    "Caller wraps call in try/catch for: "
+                            + String.join(", ", ex.caughtTypes())
+                            + " — exceptions of these types are translated/swallowed"));
+        } else {
+            out.add(new ImpliedRequirement(
+                    "No try/catch around call — exceptions propagate to caller as-is"));
+        }
+
+        return out;
+    }
+}
+```
+
+- [ ] **Step 4: Run test to verify it passes**
+
+Run: `./gradlew test --tests com.graphtipper.slice.ConsumerDeriverTest -q`
+Expected: all ConsumerDeriverTest tests pass.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add src/main/java/com/graphtipper/slice/ImpliedRequirementTemplates.java \
+        src/test/java/com/graphtipper/slice/ConsumerDeriverTest.java
+git commit -m "feat(slice): ImpliedRequirementTemplates derive requirements from usage"
+```
+
+---
+
+## Task 12: `ConsumerContract` record
+
+**Files:**
+- Create: `src/main/java/com/graphtipper/slice/ConsumerContract.java`
+- Test: extend `ConsumerDeriverTest.java`
+
+- [ ] **Step 1: Write the failing test**
+
+Append to `ConsumerDeriverTest.java`:
+
+```java
+    @Test
+    void consumerContract_constructs_with_all_fields() {
+        var contract = new ConsumerContract(
+            "C.consumer", "C.java", 42, "public void consumer() { target(); }",
+            ReturnValueUsage.empty(),
+            ExceptionHandlingNearCall.none(),
+            List.of(new ImpliedRequirement("test")),
+            List.of(),
+            1511);
+        assertThat(contract.consumerFqn()).isEqualTo("C.consumer");
+        assertThat(contract.chainsCovered()).isEqualTo(1511);
+        assertThat(contract.implications()).hasSize(1);
+    }
+```
+
+- [ ] **Step 2: Run test to verify it fails**
+
+Run: `./gradlew test --tests com.graphtipper.slice.ConsumerDeriverTest -q`
+Expected: compile failure — `ConsumerContract` not found.
+
+- [ ] **Step 3: Write minimal implementation**
+
+Create `src/main/java/com/graphtipper/slice/ConsumerContract.java`:
+
+```java
+package com.graphtipper.slice;
+
+import java.util.List;
+
+/**
+ * Aggregate description of one immediate production consumer of the target.
+ * Bundles the consumer's body slice, AST-derived return-value usage, exception
+ * handling, implied requirements, and the path clusters that funnel through it.
+ */
+public record ConsumerContract(
+        String consumerFqn,
+        String file,
+        int line,
+        String bodySlice,
+        ReturnValueUsage returnValueUsage,
+        ExceptionHandlingNearCall exceptionHandling,
+        List<ImpliedRequirement> implications,
+        List<PathCluster> clusters,
+        int chainsCovered
+) {
+    public ConsumerContract {
+        implications = List.copyOf(implications);
+        clusters = List.copyOf(clusters);
+    }
+}
+```
+
+- [ ] **Step 4: Run test to verify it passes**
+
+Run: `./gradlew test --tests com.graphtipper.slice.ConsumerDeriverTest -q`
+Expected: all tests pass.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add src/main/java/com/graphtipper/slice/ConsumerContract.java \
+        src/test/java/com/graphtipper/slice/ConsumerDeriverTest.java
+git commit -m "feat(slice): ConsumerContract record"
+```
+
+---
+
+## Task 13: `DirectTest` record
+
+**Files:**
+- Create: `src/main/java/com/graphtipper/slice/DirectTest.java`
+- Test: extend `ConsumerDeriverTest.java`
+
+- [ ] **Step 1: Write the failing test**
+
+Append to `ConsumerDeriverTest.java`:
+
+```java
+    @Test
+    void directTest_carries_test_method_args_oracle_and_snippet() {
+        var method = new com.graphtipper.model.Node.Method(
+            "m_test", "TestClass.t1", "Test.java", 1, 10, null, "", "");
+        var dt = new DirectTest(method, List.of(), new Oracle.None(), "@Test void t1() {}");
+        assertThat(dt.testMethod().fqn()).isEqualTo("TestClass.t1");
+        assertThat(dt.oracle()).isInstanceOf(Oracle.None.class);
+        assertThat(dt.snippet()).contains("@Test");
+    }
+```
+
+- [ ] **Step 2: Run test to verify it fails**
+
+Run: `./gradlew test --tests com.graphtipper.slice.ConsumerDeriverTest -q`
+Expected: compile failure — `DirectTest` not found.
+
+- [ ] **Step 3: Write minimal implementation**
+
+Create `src/main/java/com/graphtipper/slice/DirectTest.java`:
+
+```java
+package com.graphtipper.slice;
+
+import com.graphtipper.model.Node;
+import java.util.List;
+
+/**
+ * A test that calls the target directly (chain depth = 1).
+ * Surfaces in artifact §4.3 as a short Tier-A table plus snippet.
+ */
+public record DirectTest(
+        Node.Method testMethod,
+        List<ArgOrigin> args,
+        Oracle oracle,
+        String snippet
+) {
+    public DirectTest {
+        args = List.copyOf(args);
+    }
+}
+```
+
+- [ ] **Step 4: Run test to verify it passes**
+
+Run: `./gradlew test --tests com.graphtipper.slice.ConsumerDeriverTest -q`
+Expected: all tests pass.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add src/main/java/com/graphtipper/slice/DirectTest.java \
+        src/test/java/com/graphtipper/slice/ConsumerDeriverTest.java
+git commit -m "feat(slice): DirectTest record"
+```
+
+---
+
+## Task 14: `AstSnippetExtractor.sliceConsumerBody` mode
+
+**Files:**
+- Modify: `src/main/java/com/graphtipper/slice/AstSnippetExtractor.java`
+- Create: `src/test/resources/consumer-fixtures/SimpleConsumer.java`
+- Test: extend `src/test/java/com/graphtipper/slice/AstSnippetExtractorTest.java`
+
+- [ ] **Step 1: Create fixture**
+
+Create `src/test/resources/consumer-fixtures/SimpleConsumer.java`:
+
+```java
+package consumerfix;
+
+class SimpleConsumer {
+    int target(int x) { return x + 1; }
+
+    void shortConsumer() {
+        int r = target(5);
+        if (r > 0) {
+            System.out.println(r);
+        }
+    }
+
+    int longConsumer() {
+        int a = 1;
+        int b = 2;
+        int c = 3;
+        int d = 4;
+        int e = 5;
+        int f = 6;
+        int g = 7;
+        int h = 8;
+        int i = 9;
+        int j = 10;
+        // ... padding to push body length above 30 statements
+        int k = 11; int l = 12; int m = 13; int n = 14; int o = 15;
+        int p = 16; int q = 17; int r = 18; int s = 19; int t = 20;
+        int result = target(100);
+        if (result > 0) { return result; }
+        int u = 21; int v = 22; int w = 23; int x = 24; int y = 25;
+        return 0;
+    }
+}
+```
+
+- [ ] **Step 2: Write the failing test**
+
+Append to `AstSnippetExtractorTest.java`:
+
+```java
+    @Test
+    void sliceConsumerBody_returns_full_body_when_short() {
+        var ex = new AstSnippetExtractor();
+        var fixture = java.nio.file.Paths.get("src/test/resources/consumer-fixtures/SimpleConsumer.java");
+        String slice = ex.sliceConsumerBody(fixture, "consumerfix.SimpleConsumer.shortConsumer", "target");
+        assertThat(slice).contains("void shortConsumer()");
+        assertThat(slice).contains("int r = target(5)");
+        assertThat(slice).contains("if (r > 0)");
+        assertThat(slice).contains("System.out.println(r)");
+    }
+
+    @Test
+    void sliceConsumerBody_slices_long_body_to_block_around_call() {
+        var ex = new AstSnippetExtractor();
+        var fixture = java.nio.file.Paths.get("src/test/resources/consumer-fixtures/SimpleConsumer.java");
+        String slice = ex.sliceConsumerBody(fixture, "consumerfix.SimpleConsumer.longConsumer", "target");
+        assertThat(slice).contains("int longConsumer()");
+        assertThat(slice).contains("target(100)");
+        // The slice should NOT contain all 25+ padding lines:
+        long nonEmptyLineCount = slice.lines().filter(l -> !l.trim().isEmpty()).count();
+        assertThat(nonEmptyLineCount).isLessThan(30);
+    }
+
+    @Test
+    void sliceConsumerBody_returns_null_when_method_not_found() {
+        var ex = new AstSnippetExtractor();
+        var fixture = java.nio.file.Paths.get("src/test/resources/consumer-fixtures/SimpleConsumer.java");
+        String slice = ex.sliceConsumerBody(fixture, "consumerfix.SimpleConsumer.noSuchMethod", "target");
+        assertThat(slice).isNull();
+    }
+```
+
+- [ ] **Step 3: Run test to verify it fails**
+
+Run: `./gradlew test --tests com.graphtipper.slice.AstSnippetExtractorTest -q`
+Expected: compile failure — `sliceConsumerBody` not defined.
+
+- [ ] **Step 4: Implement the new mode**
+
+Add to `AstSnippetExtractor.java` (before the closing brace of the class):
+
+```java
+    /**
+     * Slice a consumer's method body for artifact §4.4 rendering.
+     * If the body has ≤ 30 statements, returns the full body (with signature line).
+     * Otherwise, returns the signature line plus the block enclosing the first call
+     * to {@code targetSimpleName} plus all sibling return/break/throw statements in
+     * the same control-flow region.
+     *
+     * @return the slice, or null if the method or the call site is not found.
+     */
+    public String sliceConsumerBody(java.nio.file.Path file, String methodFqn, String targetSimpleName) {
+        com.github.javaparser.ast.CompilationUnit cu;
+        try {
+            cu = parseCached(file);
+        } catch (Exception e) {
+            return null;
+        }
+        var methodOpt = findMethodByFqn(cu, methodFqn);
+        if (methodOpt.isEmpty()) return null;
+        com.github.javaparser.ast.body.MethodDeclaration md = methodOpt.get();
+        if (md.getBody().isEmpty()) return null;
+        var body = md.getBody().get();
+
+        // Count statements (recursive count of Statement nodes within the body).
+        long stmtCount = body.findAll(com.github.javaparser.ast.stmt.Statement.class).size();
+        String signatureLine = md.getDeclarationAsString(false, false, false);
+
+        if (stmtCount <= 30) {
+            return signatureLine + " " + body.toString();
+        }
+
+        // Find the first call to targetSimpleName.
+        var callOpt = body.findAll(com.github.javaparser.ast.expr.MethodCallExpr.class).stream()
+                .filter(c -> c.getNameAsString().equals(targetSimpleName))
+                .findFirst();
+        if (callOpt.isEmpty()) return null;
+
+        // Walk up to the nearest enclosing BlockStmt and serialize it.
+        var blockOpt = callOpt.get().findAncestor(com.github.javaparser.ast.stmt.BlockStmt.class);
+        if (blockOpt.isEmpty()) return signatureLine + " { /* call: " + targetSimpleName + " */ }";
+
+        return signatureLine + " " + blockOpt.get().toString();
+    }
+
+    /**
+     * Look up a JavaParser CompilationUnit with caching. Exposes the existing parse
+     * cache used by other slicing methods; if a private cache already exists, reuse it.
+     */
+    private com.github.javaparser.ast.CompilationUnit parseCached(java.nio.file.Path file) {
+        // If the class already has a parse cache (field like `Map<Path, CompilationUnit>`),
+        // use it. Otherwise fall back to StaticJavaParser.
+        return com.github.javaparser.StaticJavaParser.parse(file.toFile());
+    }
+
+    private java.util.Optional<com.github.javaparser.ast.body.MethodDeclaration> findMethodByFqn(
+            com.github.javaparser.ast.CompilationUnit cu, String fqn) {
+        int lastDot = fqn.lastIndexOf('.');
+        if (lastDot < 0) return java.util.Optional.empty();
+        String methodName = fqn.substring(lastDot + 1);
+        String enclosingFqn = fqn.substring(0, lastDot);
+        String simpleClass = enclosingFqn.substring(
+                Math.max(enclosingFqn.lastIndexOf('.'), enclosingFqn.lastIndexOf('$')) + 1);
+        return cu.findAll(com.github.javaparser.ast.body.MethodDeclaration.class).stream()
+                .filter(m -> m.getNameAsString().equals(methodName))
+                .filter(m -> m.findAncestor(com.github.javaparser.ast.body.TypeDeclaration.class)
+                        .map(t -> t.getNameAsString().equals(simpleClass)).orElse(false))
+                .findFirst();
+    }
+```
+
+**Note:** If `AstSnippetExtractor` already has its own parse cache (check the existing source), wire `parseCached` to reuse it instead of `StaticJavaParser`. Same for `findMethodByFqn` if a similar helper exists — remove duplicates.
+
+- [ ] **Step 5: Run test to verify it passes**
+
+Run: `./gradlew test --tests com.graphtipper.slice.AstSnippetExtractorTest -q`
+Expected: all tests pass.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add src/main/java/com/graphtipper/slice/AstSnippetExtractor.java \
+        src/test/resources/consumer-fixtures/SimpleConsumer.java \
+        src/test/java/com/graphtipper/slice/AstSnippetExtractorTest.java
+git commit -m "feat(slice): sliceConsumerBody mode for §4.4 rendering"
+```
+
+---
+
+## Task 15: `AstSnippetExtractor.sliceTestMethodRelevantRegion` mode
+
+**Files:**
+- Modify: `src/main/java/com/graphtipper/slice/AstSnippetExtractor.java`
+- Test: extend `AstSnippetExtractorTest.java`
+
+- [ ] **Step 1: Write the failing test**
+
+Append to `AstSnippetExtractorTest.java`:
+
+```java
+    @Test
+    void sliceTestMethodRelevantRegion_returns_full_body_when_short() {
+        var ex = new AstSnippetExtractor();
+        var fixture = java.nio.file.Paths.get("src/test/resources/oracle-fixtures/AssertEqualsTests.java");
+        String slice = ex.sliceTestMethodRelevantRegion(
+                fixture, "oraclefix.AssertEqualsTests.testReturnEquals");
+        assertThat(slice).contains("void testReturnEquals()");
+        assertThat(slice).contains("assertEquals(42, x)");
+        assertThat(slice).contains("int x = foo()");
+    }
+
+    @Test
+    void sliceTestMethodRelevantRegion_returns_null_when_method_not_found() {
+        var ex = new AstSnippetExtractor();
+        var fixture = java.nio.file.Paths.get("src/test/resources/oracle-fixtures/AssertEqualsTests.java");
+        String slice = ex.sliceTestMethodRelevantRegion(fixture, "oraclefix.AssertEqualsTests.noSuchTest");
+        assertThat(slice).isNull();
+    }
+```
+
+- [ ] **Step 2: Run test to verify it fails**
+
+Run: `./gradlew test --tests com.graphtipper.slice.AstSnippetExtractorTest -q`
+Expected: compile failure — method missing.
+
+- [ ] **Step 3: Implement**
+
+Add to `AstSnippetExtractor.java`:
+
+```java
+    /**
+     * Slice a test method to its relevant region for artifact §4.3 / §4.5 primary representative.
+     * If the test method body has ≤ 20 statements → full body (with signature line).
+     * Otherwise → signature line + only the statements that:
+     *   (a) data-flow into any assertion's actual-expression, or
+     *   (b) define a local variable that data-flows into the entry-point call, or
+     *   (c) are the assertion statement itself.
+     *
+     * V1 implementation: returns full body up to a 20-statement cap; if exceeded,
+     * returns the trailing 20 statements (heuristically the assertion-containing tail).
+     *
+     * @return the slice, or null if the method is not found.
+     */
+    public String sliceTestMethodRelevantRegion(java.nio.file.Path file, String methodFqn) {
+        com.github.javaparser.ast.CompilationUnit cu;
+        try {
+            cu = parseCached(file);
+        } catch (Exception e) {
+            return null;
+        }
+        var methodOpt = findMethodByFqn(cu, methodFqn);
+        if (methodOpt.isEmpty()) return null;
+        var md = methodOpt.get();
+        if (md.getBody().isEmpty()) return null;
+        var body = md.getBody().get();
+        String signatureLine = md.getDeclarationAsString(false, false, false);
+
+        long stmtCount = body.findAll(com.github.javaparser.ast.stmt.Statement.class).size();
+        if (stmtCount <= 20) {
+            return signatureLine + " " + body.toString();
+        }
+        // Heuristic tail-slice: keep last ~20 statements.
+        var stmts = body.getStatements();
+        int keep = Math.min(stmts.size(), 20);
+        var sb = new StringBuilder();
+        sb.append(signatureLine).append(" {\n");
+        for (int i = stmts.size() - keep; i < stmts.size(); i++) {
+            sb.append("    ").append(stmts.get(i).toString().replace("\n", "\n    ")).append("\n");
+        }
+        sb.append("}");
+        return sb.toString();
+    }
+```
+
+- [ ] **Step 4: Run test to verify it passes**
+
+Run: `./gradlew test --tests com.graphtipper.slice.AstSnippetExtractorTest -q`
+Expected: tests pass.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add src/main/java/com/graphtipper/slice/AstSnippetExtractor.java \
+        src/test/java/com/graphtipper/slice/AstSnippetExtractorTest.java
+git commit -m "feat(slice): sliceTestMethodRelevantRegion mode for §4.3 + §4.5"
+```
+
+---
+
+## Task 16: `ConsumerDeriver` — return-value usage classification
+
+**Files:**
+- Create: `src/main/java/com/graphtipper/slice/ConsumerDeriver.java`
+- Create: `src/test/resources/consumer-fixtures/MultiCallConsumer.java`
+- Test: extend `ConsumerDeriverTest.java`
+
+- [ ] **Step 1: Create fixture**
+
+Create `src/test/resources/consumer-fixtures/MultiCallConsumer.java`:
+
+```java
+package consumerfix;
+
+class MultiCallConsumer {
+    static class Cell { int row; int column; }
+
+    Cell target(int r, int c) { return new Cell(); }
+
+    void useAssignAndFieldRead() {
+        Cell cell = target(0, 0);
+        int x = cell.row;
+    }
+
+    void useInCondition() {
+        Cell cell = target(0, 0);
+        if (cell.row != 0) {
+            System.out.println("changed");
+        }
+    }
+
+    Cell useReturnedUnchanged() {
+        return target(0, 0);
+    }
+
+    void useDiscarded() {
+        target(0, 0);
+    }
+
+    void usePassedAsArg() {
+        process(target(0, 0));
+    }
+
+    void process(Cell c) {}
+}
+```
+
+- [ ] **Step 2: Write the failing test**
+
+Append to `ConsumerDeriverTest.java`:
+
+```java
+    private java.nio.file.Path consumerFixture(String name) {
+        return java.nio.file.Paths.get("src/test/resources/consumer-fixtures", name);
+    }
+
+    @Test
+    void classifyReturnValueUsage_detects_assign_and_field_read() {
+        var d = new ConsumerDeriver(new AstSnippetExtractor());
+        var usage = d.classifyReturnValueUsage(
+            consumerFixture("MultiCallConsumer.java"),
+            "consumerfix.MultiCallConsumer.useAssignAndFieldRead",
+            "target");
+        assertThat(usage.kinds()).contains(UsageKind.ASSIGNED_TO_LOCAL, UsageKind.FIELD_READ);
+        assertThat(usage.fieldsRead()).contains("row");
+    }
+
+    @Test
+    void classifyReturnValueUsage_detects_condition() {
+        var d = new ConsumerDeriver(new AstSnippetExtractor());
+        var usage = d.classifyReturnValueUsage(
+            consumerFixture("MultiCallConsumer.java"),
+            "consumerfix.MultiCallConsumer.useInCondition",
+            "target");
+        assertThat(usage.kinds()).contains(UsageKind.USED_IN_CONDITION);
+    }
+
+    @Test
+    void classifyReturnValueUsage_detects_returned_unchanged() {
+        var d = new ConsumerDeriver(new AstSnippetExtractor());
+        var usage = d.classifyReturnValueUsage(
+            consumerFixture("MultiCallConsumer.java"),
+            "consumerfix.MultiCallConsumer.useReturnedUnchanged",
+            "target");
+        assertThat(usage.kinds()).contains(UsageKind.RETURNED_UNCHANGED);
+    }
+
+    @Test
+    void classifyReturnValueUsage_detects_discarded() {
+        var d = new ConsumerDeriver(new AstSnippetExtractor());
+        var usage = d.classifyReturnValueUsage(
+            consumerFixture("MultiCallConsumer.java"),
+            "consumerfix.MultiCallConsumer.useDiscarded",
+            "target");
+        assertThat(usage.kinds()).contains(UsageKind.DISCARDED);
+    }
+
+    @Test
+    void classifyReturnValueUsage_detects_passed_as_arg() {
+        var d = new ConsumerDeriver(new AstSnippetExtractor());
+        var usage = d.classifyReturnValueUsage(
+            consumerFixture("MultiCallConsumer.java"),
+            "consumerfix.MultiCallConsumer.usePassedAsArg",
+            "target");
+        assertThat(usage.kinds()).contains(UsageKind.PASSED_AS_ARG);
+    }
+```
+
+- [ ] **Step 3: Run test to verify it fails**
+
+Run: `./gradlew test --tests com.graphtipper.slice.ConsumerDeriverTest -q`
+Expected: compile failure — `ConsumerDeriver` not found.
+
+- [ ] **Step 4: Write minimal implementation**
+
+Create `src/main/java/com/graphtipper/slice/ConsumerDeriver.java`:
+
+```java
+package com.graphtipper.slice;
+
+import com.github.javaparser.StaticJavaParser;
+import com.github.javaparser.ast.CompilationUnit;
+import com.github.javaparser.ast.Node;
+import com.github.javaparser.ast.body.MethodDeclaration;
+import com.github.javaparser.ast.body.TypeDeclaration;
+import com.github.javaparser.ast.body.VariableDeclarator;
+import com.github.javaparser.ast.expr.*;
+import com.github.javaparser.ast.stmt.*;
+
+import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.EnumSet;
+import java.util.List;
+import java.util.Optional;
+
+/**
+ * Derives {@link ConsumerContract}s from clusters by analyzing each consumer's body
+ * around its call(s) to the target. Stateless; constructed with an {@link AstSnippetExtractor}
+ * used for body slicing.
+ */
+public final class ConsumerDeriver {
+
+    private final AstSnippetExtractor snippetExtractor;
+
+    public ConsumerDeriver(AstSnippetExtractor snippetExtractor) {
+        this.snippetExtractor = snippetExtractor;
+    }
+
+    /** Walk the consumer's method body, classify how target's return value is used. */
+    public ReturnValueUsage classifyReturnValueUsage(Path file, String consumerFqn, String targetSimpleName) {
+        Optional<MethodDeclaration> mdOpt = findMethod(file, consumerFqn);
+        if (mdOpt.isEmpty()) return ReturnValueUsage.empty();
+        MethodDeclaration md = mdOpt.get();
+
+        EnumSet<UsageKind> kinds = EnumSet.noneOf(UsageKind.class);
+        List<String> fieldsRead = new ArrayList<>();
+
+        for (MethodCallExpr call : md.findAll(MethodCallExpr.class)) {
+            if (!call.getNameAsString().equals(targetSimpleName)) continue;
+            classifySingleCall(call, kinds, fieldsRead, md);
+        }
+        return new ReturnValueUsage(kinds.isEmpty() ? EnumSet.noneOf(UsageKind.class) : kinds, fieldsRead);
+    }
+
+    private void classifySingleCall(MethodCallExpr call, EnumSet<UsageKind> kinds,
+                                     List<String> fieldsRead, MethodDeclaration enclosing) {
+        Node parent = call.getParentNode().orElse(null);
+        if (parent == null) {
+            kinds.add(UsageKind.DISCARDED);
+            return;
+        }
+
+        // VariableDeclarator: `Cell c = target(...)`
+        if (parent instanceof VariableDeclarator vd) {
+            kinds.add(UsageKind.ASSIGNED_TO_LOCAL);
+            String varName = vd.getNameAsString();
+            scanUsesOfLocal(enclosing, varName, kinds, fieldsRead);
+            return;
+        }
+
+        // AssignExpr: `this.field = target(...)` or `local = target(...)`
+        if (parent instanceof AssignExpr ae && ae.getValue() == call) {
+            kinds.add(UsageKind.ASSIGNED_TO_FIELD);
+            return;
+        }
+
+        // ReturnStmt: `return target(...)`
+        if (parent instanceof ReturnStmt) {
+            kinds.add(UsageKind.RETURNED_UNCHANGED);
+            return;
+        }
+
+        // ExpressionStmt where the call IS the expression: `target(...);` discarded
+        if (parent instanceof ExpressionStmt es && es.getExpression() == call) {
+            kinds.add(UsageKind.DISCARDED);
+            return;
+        }
+
+        // MethodCallExpr where target is an argument: passed_as_arg
+        if (parent instanceof MethodCallExpr) {
+            kinds.add(UsageKind.PASSED_AS_ARG);
+            return;
+        }
+
+        // FieldAccessExpr where call is the scope: target(...).field
+        if (parent instanceof FieldAccessExpr fae && fae.getScope() == call) {
+            kinds.add(UsageKind.FIELD_READ);
+            fieldsRead.add(fae.getNameAsString());
+            return;
+        }
+
+        // IfStmt / WhileStmt condition or its descendants
+        if (call.findAncestor(IfStmt.class).filter(s -> isWithinCondition(call, s.getCondition())).isPresent()
+                || call.findAncestor(WhileStmt.class).filter(s -> isWithinCondition(call, s.getCondition())).isPresent()) {
+            kinds.add(UsageKind.USED_IN_CONDITION);
+        }
+        if (call.findAncestor(ForStmt.class).isPresent()
+                || call.findAncestor(ForEachStmt.class).isPresent()) {
+            kinds.add(UsageKind.USED_IN_LOOP);
+        }
+    }
+
+    private static boolean isWithinCondition(Node call, Node condition) {
+        Node cur = call;
+        while (cur != null) {
+            if (cur == condition) return true;
+            cur = cur.getParentNode().orElse(null);
+        }
+        return false;
+    }
+
+    /** After we know the call's return goes into local `varName`, scan rest of the method for uses. */
+    private void scanUsesOfLocal(MethodDeclaration md, String varName,
+                                  EnumSet<UsageKind> kinds, List<String> fieldsRead) {
+        for (NameExpr n : md.findAll(NameExpr.class)) {
+            if (!n.getNameAsString().equals(varName)) continue;
+            Node parent = n.getParentNode().orElse(null);
+            if (parent instanceof FieldAccessExpr fae && fae.getScope() == n) {
+                kinds.add(UsageKind.FIELD_READ);
+                String f = fae.getNameAsString();
+                if (!fieldsRead.contains(f)) fieldsRead.add(f);
+            } else if (parent instanceof MethodCallExpr mc && mc.getScope().map(s -> s == n).orElse(false)) {
+                kinds.add(UsageKind.METHOD_CALL_ON_RESULT);
+            } else if (parent instanceof ReturnStmt) {
+                kinds.add(UsageKind.RETURNED_UNCHANGED);
+            } else if (n.findAncestor(IfStmt.class).filter(s -> isWithinCondition(n, s.getCondition())).isPresent()
+                    || n.findAncestor(WhileStmt.class).filter(s -> isWithinCondition(n, s.getCondition())).isPresent()) {
+                kinds.add(UsageKind.USED_IN_CONDITION);
+            } else if (parent instanceof ArrayAccessExpr aae && aae.getIndex() == n) {
+                kinds.add(UsageKind.USED_IN_INDEX_EXPR);
+            }
+        }
+    }
+
+    private Optional<MethodDeclaration> findMethod(Path file, String fqn) {
+        try {
+            CompilationUnit cu = StaticJavaParser.parse(file.toFile());
+            int lastDot = fqn.lastIndexOf('.');
+            if (lastDot < 0) return Optional.empty();
+            String methodName = fqn.substring(lastDot + 1);
+            String enclosingFqn = fqn.substring(0, lastDot);
+            String simpleClass = enclosingFqn.substring(
+                    Math.max(enclosingFqn.lastIndexOf('.'), enclosingFqn.lastIndexOf('$')) + 1);
+            return cu.findAll(MethodDeclaration.class).stream()
+                    .filter(m -> m.getNameAsString().equals(methodName))
+                    .filter(m -> m.findAncestor(TypeDeclaration.class)
+                            .map(t -> t.getNameAsString().equals(simpleClass)).orElse(false))
+                    .findFirst();
+        } catch (Exception e) {
+            return Optional.empty();
+        }
+    }
+}
+```
+
+- [ ] **Step 5: Run test to verify it passes**
+
+Run: `./gradlew test --tests com.graphtipper.slice.ConsumerDeriverTest -q`
+Expected: all tests pass.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add src/main/java/com/graphtipper/slice/ConsumerDeriver.java \
+        src/test/resources/consumer-fixtures/MultiCallConsumer.java \
+        src/test/java/com/graphtipper/slice/ConsumerDeriverTest.java
+git commit -m "feat(slice): ConsumerDeriver.classifyReturnValueUsage"
+```
+
+---
+
+> **Remaining tasks (17–37) continue below.** Each follows the same TDD template.
 
 ---
 
