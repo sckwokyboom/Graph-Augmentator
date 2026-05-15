@@ -4229,7 +4229,543 @@ git commit -m "feat(render): JsonRenderer schema v2.0 (directTests, consumers, c
 
 ---
 
-> **Remaining tasks (33–37) continue below.** Each follows the same TDD template.
+## Task 33: `BudgetPlanner` — cluster-based eviction
+
+**Files:**
+- Modify: `src/main/java/com/graphtipper/render/BudgetPlanner.java`
+- Modify: `src/test/java/com/graphtipper/render/BudgetPlannerTest.java`
+
+- [ ] **Step 1: Read the current BudgetPlanner to understand interface**
+
+Run: `cat /Users/sckwoky/Projects/Graph-Tipper/src/main/java/com/graphtipper/render/BudgetPlanner.java`
+Note the method signatures and the eviction order constants/structure.
+
+- [ ] **Step 2: Update existing tests for new eviction unit**
+
+In `src/test/java/com/graphtipper/render/BudgetPlannerTest.java`, find tests that build chains and assert which chains get evicted. Replace with cluster-aware fixtures. Add the new test:
+
+```java
+    @Test
+    void eviction_demotes_low_rank_clusters_to_long_tail_first() {
+        // Build an Artifact that overflows budget. Verify that the lowest-ranked
+        // (by chainsCovered) cluster moves into longTailSingletons before any
+        // higher-ranked cluster loses matrix rows.
+        var target = new com.graphtipper.model.Node.Method("m_t", "T.target", "T.java", 1, 5, null, "", "");
+        var sig1 = new com.graphtipper.slice.PathSignature(java.util.List.of("E1", "C", "target"));
+        var sig2 = new com.graphtipper.slice.PathSignature(java.util.List.of("E2", "C", "target"));
+        var m1 = new com.graphtipper.model.Node.Method("m1", "T1.x", "T1.java", 1, 1, null, "", "");
+        var member = new com.graphtipper.slice.ClusterMember(m1, java.util.List.of(), new com.graphtipper.slice.Oracle.None());
+        var highRank = new com.graphtipper.slice.PathCluster(sig1, "E1", "C", 3,
+                java.util.List.of(member, member, member, member, member), java.util.List.of());
+        var lowRank = new com.graphtipper.slice.PathCluster(sig2, "E2", "C", 3,
+                java.util.List.of(member), java.util.List.of());
+        var consumer = new com.graphtipper.slice.ConsumerContract(
+                "C", "F.java", 1, "body",
+                com.graphtipper.slice.ReturnValueUsage.empty(),
+                com.graphtipper.slice.ExceptionHandlingNearCall.none(),
+                java.util.List.of(), java.util.List.of(highRank, lowRank), 6);
+        var artifact = new Artifact(target, "", java.util.List.of(), java.util.List.of(),
+                java.util.List.of(consumer), java.util.List.of(), false,
+                new com.graphtipper.slice.LocalContext(java.util.List.of(), java.util.List.of()));
+
+        var tight = new com.graphtipper.util.TokenBudget(50); // very small budget
+        var planner = new BudgetPlanner();
+        var planned = planner.fit(artifact, tight);
+
+        // Low-rank cluster moved to longTailSingletons; high-rank still in consumer.
+        assertThat(planned.longTailSingletons()).isNotEmpty();
+        assertThat(planned.consumers().get(0).clusters()).extracting(c -> c.entryPoint())
+                .doesNotContain("E2");
+    }
+```
+
+- [ ] **Step 3: Run test to verify it fails**
+
+Run: `./gradlew test --tests com.graphtipper.render.BudgetPlannerTest -q`
+Expected: compile/assertion failure.
+
+- [ ] **Step 4: Rewrite `BudgetPlanner.fit` (or its equivalent)**
+
+Open `src/main/java/com/graphtipper/render/BudgetPlanner.java`. The exact rewrite depends on the current method signatures, but the new eviction order per spec §7.2 is:
+
+```
+1. Drop low-rank clusters (below cumulative-coverage threshold) → longTailSingletons.
+2. Drop singleton clusters → longTailSingletons.
+3. Trim differential-matrix rows from large clusters (keep primary + 2 alternates).
+4. Truncate behavior-signal evidence strings.
+5. Drop test snippets, keeping only primary representative's snippet per cluster.
+6. As final fallback: drop entire low-rank consumer blocks.
+```
+
+Implementation sketch (insert/replace as appropriate):
+
+```java
+public final class BudgetPlanner {
+
+    /** Estimate token cost of an Artifact by rendering it with a sandbox budget and using charCount/4. */
+    private int estimateTokens(Artifact a) {
+        // Use MarkdownRenderer with an unlimited budget to get the actual rendered length.
+        var sandbox = new com.graphtipper.util.TokenBudget(Integer.MAX_VALUE);
+        String md = new MarkdownRenderer().render(a, sandbox, "x", "x");
+        return md.length() / 4; // 4 chars/token approximation
+    }
+
+    /**
+     * Returns an Artifact rewritten to fit within the budget. Eviction order per spec §7.2.
+     * Throws on exit-code-3 if even the protected minimum doesn't fit.
+     */
+    public Artifact fit(Artifact a, com.graphtipper.util.TokenBudget budget) {
+        Artifact cur = a;
+        if (estimateTokens(cur) <= budget.max()) return cur;
+
+        // Step 1+2: move low-rank and singleton clusters to longTailSingletons.
+        cur = evictLowRankAndSingletonClusters(cur);
+        if (estimateTokens(cur) <= budget.max()) return cur;
+
+        // Step 3: trim matrix rows to 3 per cluster.
+        cur = trimMatrixRows(cur, 3);
+        if (estimateTokens(cur) <= budget.max()) return cur;
+
+        // Step 4: truncate signal evidence to 40 chars.
+        cur = truncateSignalEvidence(cur, 40);
+        if (estimateTokens(cur) <= budget.max()) return cur;
+
+        // Step 5: drop snippets except the primary representative of each cluster.
+        cur = dropNonPrimarySnippets(cur);
+        if (estimateTokens(cur) <= budget.max()) return cur;
+
+        // Step 6: drop low-rank consumer blocks.
+        cur = dropLowRankConsumers(cur);
+        if (estimateTokens(cur) <= budget.max()) return cur;
+
+        // Protected minimum check.
+        if (estimateTokens(protectedMinimum(cur)) > budget.max()) {
+            throw new BudgetExceededException("budget exceeded on minimum");
+        }
+        return cur;
+    }
+
+    /** Helpers below — each returns a new Artifact, mutating none. */
+    private Artifact evictLowRankAndSingletonClusters(Artifact a) {
+        var newConsumers = new java.util.ArrayList<com.graphtipper.slice.ConsumerContract>();
+        var demoted = new java.util.ArrayList<com.graphtipper.slice.PathCluster>(a.longTailSingletons());
+        for (var c : a.consumers()) {
+            var keep = new java.util.ArrayList<com.graphtipper.slice.PathCluster>();
+            for (var cluster : c.clusters()) {
+                if (cluster.chainsCovered() <= 1) demoted.add(cluster);
+                else keep.add(cluster);
+            }
+            newConsumers.add(new com.graphtipper.slice.ConsumerContract(
+                    c.consumerFqn(), c.file(), c.line(), c.bodySlice(),
+                    c.returnValueUsage(), c.exceptionHandling(),
+                    c.implications(), keep, c.chainsCovered()));
+        }
+        return new Artifact(a.target(), a.currentBody(), a.chains(),
+                a.directTests(), newConsumers, demoted, a.truncated(), a.localContext());
+    }
+
+    private Artifact trimMatrixRows(Artifact a, int rowCap) {
+        var newConsumers = new java.util.ArrayList<com.graphtipper.slice.ConsumerContract>();
+        for (var c : a.consumers()) {
+            var trimmed = new java.util.ArrayList<com.graphtipper.slice.PathCluster>();
+            for (var cluster : c.clusters()) {
+                int keep = Math.min(rowCap, cluster.members().size());
+                trimmed.add(cluster.withMembers(cluster.members().subList(0, keep)));
+            }
+            newConsumers.add(new com.graphtipper.slice.ConsumerContract(
+                    c.consumerFqn(), c.file(), c.line(), c.bodySlice(),
+                    c.returnValueUsage(), c.exceptionHandling(),
+                    c.implications(), trimmed, c.chainsCovered()));
+        }
+        return new Artifact(a.target(), a.currentBody(), a.chains(),
+                a.directTests(), newConsumers, a.longTailSingletons(), a.truncated(), a.localContext());
+    }
+
+    private Artifact truncateSignalEvidence(Artifact a, int charLimit) {
+        var newConsumers = new java.util.ArrayList<com.graphtipper.slice.ConsumerContract>();
+        for (var c : a.consumers()) {
+            var newClusters = new java.util.ArrayList<com.graphtipper.slice.PathCluster>();
+            for (var cluster : c.clusters()) {
+                var newSignals = new java.util.ArrayList<com.graphtipper.slice.BehaviorSignal>();
+                for (var s : cluster.signals()) {
+                    String ev = s.evidence() == null ? null
+                            : (s.evidence().length() > charLimit
+                               ? s.evidence().substring(0, charLimit) + "…"
+                               : s.evidence());
+                    newSignals.add(new com.graphtipper.slice.BehaviorSignal(s.tag(), ev));
+                }
+                newClusters.add(cluster.withSignals(newSignals));
+            }
+            newConsumers.add(new com.graphtipper.slice.ConsumerContract(
+                    c.consumerFqn(), c.file(), c.line(), c.bodySlice(),
+                    c.returnValueUsage(), c.exceptionHandling(),
+                    c.implications(), newClusters, c.chainsCovered()));
+        }
+        return new Artifact(a.target(), a.currentBody(), a.chains(),
+                a.directTests(), newConsumers, a.longTailSingletons(), a.truncated(), a.localContext());
+    }
+
+    private Artifact dropNonPrimarySnippets(Artifact a) {
+        // For now, the only "snippets" in members are implicit (file:line pointers).
+        // No-op placeholder; if/when we add per-member snippets, drop them here.
+        return a;
+    }
+
+    private Artifact dropLowRankConsumers(Artifact a) {
+        if (a.consumers().size() <= 1) return a;
+        var kept = a.consumers().subList(0, 1);
+        return new Artifact(a.target(), a.currentBody(), a.chains(),
+                a.directTests(), kept, a.longTailSingletons(),
+                /*truncated*/ true, a.localContext());
+    }
+
+    private Artifact protectedMinimum(Artifact a) {
+        // target + direct tests + top-1 consumer body slice + top-1 cluster primary row only.
+        if (a.consumers().isEmpty()) return a;
+        var topConsumer = a.consumers().get(0);
+        var minClusters = topConsumer.clusters().isEmpty()
+                ? java.util.List.<com.graphtipper.slice.PathCluster>of()
+                : java.util.List.of(topConsumer.clusters().get(0).withMembers(
+                        topConsumer.clusters().get(0).members().subList(0,
+                                Math.min(1, topConsumer.clusters().get(0).members().size()))));
+        var minConsumer = new com.graphtipper.slice.ConsumerContract(
+                topConsumer.consumerFqn(), topConsumer.file(), topConsumer.line(),
+                topConsumer.bodySlice(), topConsumer.returnValueUsage(), topConsumer.exceptionHandling(),
+                topConsumer.implications(), minClusters, topConsumer.chainsCovered());
+        return new Artifact(a.target(), a.currentBody(), a.chains(),
+                a.directTests(), java.util.List.of(minConsumer),
+                java.util.List.of(), true, a.localContext());
+    }
+
+    public static final class BudgetExceededException extends RuntimeException {
+        public BudgetExceededException(String msg) { super(msg); }
+    }
+}
+```
+
+(If `BudgetPlanner` currently has a different method name like `plan(...)` instead of `fit`, rename to match. Preserve the existing public API.)
+
+- [ ] **Step 5: Run test to verify it passes**
+
+Run: `./gradlew test --tests com.graphtipper.render.BudgetPlannerTest -q`
+Expected: all tests pass.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add src/main/java/com/graphtipper/render/BudgetPlanner.java \
+        src/test/java/com/graphtipper/render/BudgetPlannerTest.java
+git commit -m "feat(render): BudgetPlanner cluster-based eviction order"
+```
+
+---
+
+## Task 34: `Main.java` — new CLI flags + orchestration wiring
+
+**Files:**
+- Modify: `src/main/java/com/graphtipper/cli/Main.java`
+
+- [ ] **Step 1: Read current Main to find orchestration spot**
+
+Run: `cat /Users/sckwoky/Projects/Graph-Tipper/src/main/java/com/graphtipper/cli/Main.java`
+
+Locate (a) the picocli `@Option` declarations and (b) the call sequence that builds `Artifact`.
+
+- [ ] **Step 2: Add the new options**
+
+In `Main.java`, alongside existing `@Option` fields, add:
+
+```java
+    @picocli.CommandLine.Option(names = "--consumer-cap",
+            description = "Max consumer blocks rendered before cut-off (default 5)")
+    int consumerCap = 5;
+
+    @picocli.CommandLine.Option(names = "--cluster-cap",
+            description = "Max path clusters per consumer block (default 10)")
+    int clusterCap = 10;
+
+    @picocli.CommandLine.Option(names = "--cluster-coverage",
+            description = "Cumulative chain-coverage percentage threshold for cluster cut-off (default 90)")
+    int clusterCoverage = 90;
+
+    @picocli.CommandLine.Option(names = "--matrix-rows",
+            description = "Max differential-matrix rows per cluster (default 5)")
+    int matrixRows = 5;
+
+    @picocli.CommandLine.Option(names = "--include-test-level-args",
+            description = "Include entry-point invocation args as an extra matrix column (off by default)")
+    boolean includeTestLevelArgs = false;
+```
+
+- [ ] **Step 3: Wire orchestration after `enrichedChains` are built**
+
+Find where `Artifact` is constructed currently. Replace the construction block with the new pipeline:
+
+```java
+        // After: enrichedChains : List<Chain>, target : Node.Method, localContext built.
+
+        // 1. Cluster chains by exact path signature.
+        var rawClusters = new com.graphtipper.slice.PathClusterer().cluster(enrichedChains, targetFqn);
+
+        // 2. Build the test-fqn → file map, the test-fqn → argsAtTarget map, and direct tests list.
+        var testFqnToFile = new java.util.HashMap<String, java.nio.file.Path>();
+        var chainArgsMap = new java.util.HashMap<String, java.util.List<com.graphtipper.slice.ArgOrigin>>();
+        var directTests = new java.util.ArrayList<com.graphtipper.slice.DirectTest>();
+        var oracleExtractor = new com.graphtipper.slice.OracleExtractor();
+        var snippetExtractor = new com.graphtipper.slice.AstSnippetExtractor();
+        for (var chain : enrichedChains) {
+            if (chain.steps().isEmpty()) continue;
+            String testFqn = chain.test().fqn();
+            if (chain.test().file() != null) {
+                testFqnToFile.put(testFqn, java.nio.file.Paths.get(projectRoot.toString(), chain.test().file()));
+            }
+            // args at target = last step's argOrigins
+            var lastStep = chain.steps().get(chain.steps().size() - 1);
+            chainArgsMap.put(testFqn, lastStep.argOrigins());
+            if (chain.steps().size() == 1) {
+                // depth=1 → direct test
+                String snippet = chain.test().file() == null
+                        ? ""
+                        : snippetExtractor.sliceTestMethodRelevantRegion(
+                                java.nio.file.Paths.get(projectRoot.toString(), chain.test().file()), testFqn);
+                directTests.add(new com.graphtipper.slice.DirectTest(
+                        chain.test(),
+                        lastStep.argOrigins(),
+                        chain.test().file() == null
+                                ? new com.graphtipper.slice.Oracle.None()
+                                : oracleExtractor.primaryFor(
+                                        java.nio.file.Paths.get(projectRoot.toString(), chain.test().file()),
+                                        testFqn, targetFqn),
+                        snippet == null ? "" : snippet));
+            }
+        }
+
+        // 3. Enrich clusters with oracles and args.
+        var enricher = new com.graphtipper.slice.ClusterEnricher(oracleExtractor);
+        var enrichedClusters = enricher.enrich(rawClusters,
+                fqn -> testFqnToFile.get(fqn), chainArgsMap);
+
+        // 4. Apply differential analysis per cluster.
+        var differentialAnalyzer = new com.graphtipper.slice.DifferentialAnalyzer(
+                new com.graphtipper.render.ArgRenderer());
+        var clustersWithSignals = new java.util.ArrayList<com.graphtipper.slice.PathCluster>();
+        for (var cluster : enrichedClusters) {
+            clustersWithSignals.add(cluster.withSignals(differentialAnalyzer.analyze(cluster)));
+        }
+
+        // 5. Cap clusters per coverage threshold and clusterCap.
+        var (selected, singletons) = capClusters(clustersWithSignals, clusterCap, clusterCoverage);
+
+        // 6. Build consumer contracts. The consumerFqn → source-file resolver finds the .java by
+        // searching ProjectGraph or by scanning the project root.
+        var consumerDeriver = new com.graphtipper.slice.ConsumerDeriver(snippetExtractor);
+        var consumers = consumerDeriver.derive(selected, simpleNameOf(targetFqn),
+                fqn -> resolveSourceFile(projectRoot, fqn, projectGraph));
+
+        // 7. Cap consumers.
+        if (consumers.size() > consumerCap) {
+            consumers = consumers.subList(0, consumerCap);
+        }
+
+        var artifact = new com.graphtipper.render.Artifact(
+                target, currentBody, enrichedChains,
+                directTests, consumers, singletons, false, localContext);
+```
+
+Helper methods (place inside the class):
+
+```java
+    private static record CapResult(java.util.List<com.graphtipper.slice.PathCluster> selected,
+                                     java.util.List<com.graphtipper.slice.PathCluster> singletons) {}
+
+    private CapResult capClusters(java.util.List<com.graphtipper.slice.PathCluster> all,
+                                   int cap, int coveragePct) {
+        int total = all.stream().mapToInt(c -> c.chainsCovered()).sum();
+        int threshold = (int) Math.ceil(total * coveragePct / 100.0);
+        var selected = new java.util.ArrayList<com.graphtipper.slice.PathCluster>();
+        var singletons = new java.util.ArrayList<com.graphtipper.slice.PathCluster>();
+        int running = 0;
+        for (var c : all) {
+            if (c.chainsCovered() == 1) {
+                singletons.add(c);
+                continue;
+            }
+            if (selected.size() < cap && running < threshold) {
+                selected.add(c);
+                running += c.chainsCovered();
+            } else {
+                singletons.add(c); // demote to long tail
+            }
+        }
+        return new CapResult(selected, singletons);
+    }
+
+    private static String simpleNameOf(String fqn) {
+        int lastDot = fqn.lastIndexOf('.');
+        return lastDot < 0 ? fqn : fqn.substring(lastDot + 1);
+    }
+
+    private java.nio.file.Path resolveSourceFile(java.nio.file.Path projectRoot, String consumerFqn,
+                                                   com.graphtipper.model.ProjectGraph graph) {
+        // Lookup via ProjectGraph: find the method node with this FQN and read its `file` field.
+        var node = graph.findMethod(consumerFqn);
+        if (node == null || node.file() == null) return null;
+        return projectRoot.resolve(node.file());
+    }
+```
+
+(`projectGraph` and `projectRoot` need to be accessible at this point in `Main.run()` — they should already be in scope from earlier in the method. If `ProjectGraph.findMethod` doesn't exist, add a simple linear scan helper there.)
+
+- [ ] **Step 4: Build + run smoke**
+
+Run: `./gradlew installDist -q && ./build/install/graph-tipper/bin/graph-tipper --help`
+Expected: new flags appear in help output.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add src/main/java/com/graphtipper/cli/Main.java
+git commit -m "feat(cli): new flags + wire v2 orchestration through PathClusterer/Enricher/ConsumerDeriver"
+```
+
+---
+
+## Task 35: `PicocliSmokeTest` — verify v2 artifact for putValue
+
+**Files:**
+- Modify: `src/test/java/com/graphtipper/PicocliSmokeTest.java`
+
+- [ ] **Step 1: Add v2 assertions**
+
+Append to the existing `PicocliSmokeTest.java`:
+
+```java
+    @Test
+    void v2_artifact_for_putValue_is_well_compressed() {
+        org.junit.jupiter.api.Assumptions.assumeTrue(
+                System.getenv("GRAPHTIPPER_PICOCLI_HOME") != null,
+                "GRAPHTIPPER_PICOCLI_HOME unset; smoke skipped");
+
+        java.nio.file.Path picocli = java.nio.file.Paths.get(System.getenv("GRAPHTIPPER_PICOCLI_HOME"));
+        java.nio.file.Path out = java.nio.file.Paths.get(System.getProperty("java.io.tmpdir"), "gt-smoke-v2");
+        try { org.assertj.core.util.Files.delete(out.toFile()); } catch (Exception ignored) {}
+        out.toFile().mkdirs();
+
+        int rc = new picocli.CommandLine(new com.graphtipper.cli.Main()).execute(
+                "--project", picocli.toString(),
+                "--target", "src/main/java/picocli/CommandLine.java#TextTable.putValue(int,int,Text)",
+                "--out", out.toString(),
+                "--budget-tokens", "20000");
+        assertThat(rc).isEqualTo(0);
+
+        var budgetMd = java.nio.file.Files.list(out)
+                .filter(p -> p.toString().endsWith(".budget.md"))
+                .findFirst().orElseThrow();
+        var content = java.nio.file.Files.readString(budgetMd);
+        long lineCount = content.lines().count();
+
+        // V2 smoke targets per spec §9.
+        assertThat(lineCount).as("budget.md size").isLessThanOrEqualTo(500);
+        assertThat(content).contains("## Consumer contracts");
+        assertThat(content).contains("addRowValues");  // the immediate consumer
+        assertThat(content).contains("## Direct tests");
+        assertThat(content).contains("Consumers: 1");  // for putValue
+        // ≤ 10 cluster blocks rendered
+        long clusterCount = content.lines().filter(l -> l.startsWith("#### 4.4.")).count();
+        assertThat(clusterCount).isLessThanOrEqualTo(10);
+    }
+```
+
+- [ ] **Step 2: Run smoke (only if env var set)**
+
+```bash
+GRAPHTIPPER_PICOCLI_HOME=/tmp/picocli ./gradlew test --tests com.graphtipper.PicocliSmokeTest.v2_artifact_for_putValue_is_well_compressed -q
+```
+Expected: pass.
+
+- [ ] **Step 3: Commit**
+
+```bash
+git add src/test/java/com/graphtipper/PicocliSmokeTest.java
+git commit -m "test: PicocliSmokeTest verifies v2 artifact for putValue (≤500 lines, 1 consumer, ≤10 clusters)"
+```
+
+---
+
+## Task 36: Update remaining existing tests
+
+**Files:**
+- Modify: any tests that still construct `Artifact` with 5 args, reference `LocalContext.productionCallSites`, or assert on legacy MarkdownRenderer output
+
+- [ ] **Step 1: Run all tests, observe failures**
+
+Run: `./gradlew test -q`
+Capture the list of failing tests (most will be in `MarkdownRendererTest`, `JsonRendererTest`, `LocalContextExtractorTest`, `BudgetPlannerTest`, `IntegrationTest`).
+
+- [ ] **Step 2: For each failing test, decide migration strategy**
+
+For each failure:
+- If the test asserts the old chain-shaped output → rewrite to assert the v2 shape (consumer block, cluster, matrix).
+- If the test asserts `productionCallSites` → delete that assertion or migrate it to assert on `consumers[].clusters[]`.
+- If the test constructs `Artifact` with 5 args and the convenience constructor doesn't match (e.g., truncated parameter position changed) → switch to the full 8-arg form.
+
+- [ ] **Step 3: Re-run all tests until green**
+
+Run: `./gradlew test -q`
+Expected: all tests pass.
+
+- [ ] **Step 4: Commit**
+
+```bash
+git add src/test/java
+git commit -m "test: migrate existing tests to v2 artifact shape"
+```
+
+---
+
+## Task 37: Final integration — installDist + manual picocli smoke
+
+**Files:** (no source changes; verification only)
+
+- [ ] **Step 1: Clean build + tests**
+
+Run: `./gradlew clean test installDist -q`
+Expected: BUILD SUCCESSFUL with all tests passing.
+
+- [ ] **Step 2: Run end-to-end against picocli**
+
+```bash
+git clone https://github.com/remkop/picocli /tmp/picocli-v2-smoke 2>/dev/null || true
+./build/install/graph-tipper/bin/graph-tipper \
+    --project /tmp/picocli-v2-smoke \
+    --target 'src/main/java/picocli/CommandLine.java#TextTable.putValue(int,int,Text)' \
+    --out /tmp/gt-out-v2
+```
+Expected: prints path to a `.budget.md` and exits 0.
+
+- [ ] **Step 3: Eyeball the artifact against the spec**
+
+```bash
+less /tmp/gt-out-v2/*.budget.md
+```
+Verify:
+- Header carries `Consumers: 1`, `Path clusters: <small N>`, `Direct tests: 2`.
+- A `## Direct tests` section appears with 2 rows.
+- A `## Consumer contracts` section with `### Consumer 1: TextTable.addRowValues` block.
+- Inside the consumer block, `#### 4.4.1.a Cluster:` entries appear with path renderings and differential matrices.
+- The legacy `## Test Chains` section does NOT appear anywhere.
+- `## Local context` does not list production call-sites (they moved).
+
+- [ ] **Step 4: Run self-review checklist (§ below)**
+
+- [ ] **Step 5: Commit any final fixes** (if eyeballing reveals issues)
+
+```bash
+git add <files>
+git commit -m "fix: address v2 smoke findings"
+```
+
+---
 
 ---
 
