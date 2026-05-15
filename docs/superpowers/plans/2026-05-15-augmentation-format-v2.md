@@ -3642,7 +3642,594 @@ git commit -m "feat(render): renderConsumerBlock (body slice + usage + implicati
 
 ---
 
-> **Remaining tasks (28–37) continue below.** Each follows the same TDD template.
+## Task 28: `MarkdownRenderer.renderPathCluster` with differential matrix
+
+**Files:**
+- Modify: `src/main/java/com/graphtipper/render/MarkdownRenderer.java`
+- Modify: `src/test/java/com/graphtipper/render/MarkdownRendererTest.java`
+
+- [ ] **Step 1: Write the failing test**
+
+Append to `MarkdownRendererTest.java`:
+
+```java
+    @Test
+    void path_cluster_renders_with_differential_matrix() {
+        var target = new com.graphtipper.model.Node.Method(
+                "m_t", "T.target", "T.java", 1, 5, null, "", "");
+        var test1 = new com.graphtipper.model.Node.Method(
+                "m1", "ArgGroupTest.testRequired", "ArgGroupTest.java", 142, 150, null, "", "");
+        var test2 = new com.graphtipper.model.Node.Method(
+                "m2", "ArgGroupTest.testMutex", "ArgGroupTest.java", 200, 210, null, "", "");
+        var args1 = java.util.List.of(
+                com.graphtipper.slice.ArgOrigin.literal(0, "0", "F.java", 1),
+                com.graphtipper.slice.ArgOrigin.literal(1, "0", "F.java", 1));
+        var args2 = java.util.List.of(
+                com.graphtipper.slice.ArgOrigin.literal(0, "0", "F.java", 1),
+                com.graphtipper.slice.ArgOrigin.literal(1, "1", "F.java", 1));
+        var members = java.util.List.of(
+                new com.graphtipper.slice.ClusterMember(test1, args1,
+                        new com.graphtipper.slice.Oracle.ExceptionMessage(
+                                "MPE", com.graphtipper.slice.Oracle.MatchKind.CONTAINS, "[-a -b]")),
+                new com.graphtipper.slice.ClusterMember(test2, args2,
+                        new com.graphtipper.slice.Oracle.ExceptionMessage(
+                                "MEAE", com.graphtipper.slice.Oracle.MatchKind.CONTAINS, "(-x | -y)")));
+        var sig = new com.graphtipper.slice.PathSignature(java.util.List.of(
+                "CommandLine.parseArgs", "CommandLine.parse", "CommandLine.parse",
+                "TextTable.addRowValues", "putValue"));
+        var cluster = new com.graphtipper.slice.PathCluster(
+                sig, "CommandLine.parseArgs", "TextTable.addRowValues", 5, members, java.util.List.of());
+        var consumer = new com.graphtipper.slice.ConsumerContract(
+                "TextTable.addRowValues", "F.java", 17234, "void addRowValues(){}",
+                com.graphtipper.slice.ReturnValueUsage.empty(),
+                com.graphtipper.slice.ExceptionHandlingNearCall.none(),
+                java.util.List.of(), java.util.List.of(cluster), 2);
+        var artifact = new Artifact(target, "", java.util.List.of(), java.util.List.of(),
+                java.util.List.of(consumer), java.util.List.of(), false,
+                new com.graphtipper.slice.LocalContext(java.util.List.of(), java.util.List.of()));
+        var budget = new com.graphtipper.util.TokenBudget(20000); budget.charge(100);
+        String md = new MarkdownRenderer().render(artifact, budget, "abc", "proj");
+        assertThat(md).contains("Cluster: CommandLine.parseArgs path");
+        assertThat(md).contains("Depth:** 5");
+        // Path renders with method-name compression: two consecutive "parse" → "parse(×2)"
+        assertThat(md).contains("parse(×2)");
+        assertThat(md).contains("ArgGroupTest.testRequired");
+        // Differential matrix
+        assertThat(md).contains("Differential matrix");
+        assertThat(md).contains("[-a -b]");
+    }
+```
+
+- [ ] **Step 2: Run test to verify it fails**
+
+Run: `./gradlew test --tests com.graphtipper.render.MarkdownRendererTest -q`
+Expected: failure — clusters don't render.
+
+- [ ] **Step 3: Add `renderPathCluster` to `MarkdownRenderer`**
+
+In `renderConsumerBlock`, replace the `// Path clusters rendered in Task 28.` comment with a call:
+
+```java
+        // Path clusters
+        int ci = 1;
+        for (var cluster : c.clusters()) {
+            renderPathCluster(sb, cluster, n, ci++);
+        }
+```
+
+Add the method:
+
+```java
+    private void renderPathCluster(StringBuilder sb, com.graphtipper.slice.PathCluster cluster,
+                                    int consumerNum, int clusterNum) {
+        String clusterAnchor = "4.4." + consumerNum + "." + (char) ('a' + clusterNum - 1);
+        String entrySimple = simpleMethodName(cluster.entryPoint());
+        sb.append("#### ").append(clusterAnchor)
+          .append(" Cluster: ").append(entrySimple).append(" path (")
+          .append(cluster.chainsCovered()).append(" chains)\n\n");
+        sb.append("**Entry-point:** `").append(cluster.entryPoint()).append("`\n");
+        sb.append("**Path:** ").append(renderPathSignature(cluster.signature())).append("\n");
+        sb.append("**Depth:** ").append(cluster.depth()).append("\n\n");
+
+        if (cluster.members().isEmpty()) {
+            sb.append("_(no member tests resolved)_\n\n");
+            return;
+        }
+
+        // Primary representative = first member.
+        var primary = cluster.members().get(0);
+        sb.append("**Primary representative:** `").append(primary.testMethod().fqn())
+          .append("` — `").append(primary.testMethod().file()).append(":")
+          .append(primary.testMethod().lineStart()).append("`\n\n");
+
+        // Differential matrix — up to 5 rows.
+        sb.append("**Differential matrix (").append(Math.min(cluster.members().size(), 5))
+          .append(" representatives of ").append(cluster.members().size()).append("):**\n\n");
+        sb.append("| Test | Args at target | Oracle |\n");
+        sb.append("|---|---|---|\n");
+        var argRenderer = new ArgRenderer();
+        int rows = Math.min(cluster.members().size(), 5);
+        for (int i = 0; i < rows; i++) {
+            var m = cluster.members().get(i);
+            sb.append("| `").append(m.testMethod().fqn()).append("` | ")
+              .append(escapePipes(argRenderer.renderTuple(m.argsAtTarget()))).append(" | ")
+              .append(escapePipes(renderOracle(m.oracle()))).append(" |\n");
+        }
+        if (cluster.members().size() > 5) {
+            sb.append("\n**+ ").append(cluster.members().size() - 5)
+              .append(" more tests with similar profile** (see JSON sidecar)\n");
+        }
+        sb.append("\n");
+    }
+
+    private static String renderPathSignature(com.graphtipper.slice.PathSignature sig) {
+        // Compress consecutive identical simple-method-names: parse, parse, parse → parse(×3)
+        var simples = sig.fqns().stream().map(MarkdownRenderer::simpleMethodName).toList();
+        var out = new StringBuilder();
+        int i = 0;
+        while (i < simples.size()) {
+            int j = i;
+            while (j + 1 < simples.size() && simples.get(j + 1).equals(simples.get(i))) j++;
+            int count = j - i + 1;
+            if (count > 1) out.append(simples.get(i)).append("(×").append(count).append(")");
+            else out.append(simples.get(i));
+            if (j + 1 < simples.size()) out.append(" → ");
+            i = j + 1;
+        }
+        return out.toString();
+    }
+
+    private static String simpleMethodName(String fqn) {
+        if (fqn == null) return "?";
+        int lastDot = fqn.lastIndexOf('.');
+        if (lastDot < 0) return fqn;
+        String simple = fqn.substring(lastDot + 1);
+        // include enclosing simple class for clarity: ClassName.method
+        int prevDot = fqn.lastIndexOf('.', lastDot - 1);
+        int prevDollar = fqn.lastIndexOf('$', lastDot - 1);
+        int prev = Math.max(prevDot, prevDollar);
+        return prev < 0 ? simple : fqn.substring(prev + 1, lastDot) + "." + simple;
+    }
+```
+
+- [ ] **Step 4: Run test to verify it passes**
+
+Run: `./gradlew test --tests com.graphtipper.render.MarkdownRendererTest -q`
+Expected: tests pass.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add src/main/java/com/graphtipper/render/MarkdownRenderer.java \
+        src/test/java/com/graphtipper/render/MarkdownRendererTest.java
+git commit -m "feat(render): renderPathCluster with differential matrix and path compression"
+```
+
+---
+
+## Task 29: `MarkdownRenderer` — behavior signals + singleton compact rendering
+
+**Files:**
+- Modify: `src/main/java/com/graphtipper/render/MarkdownRenderer.java`
+- Modify: `src/test/java/com/graphtipper/render/MarkdownRendererTest.java`
+
+- [ ] **Step 1: Write the failing test**
+
+Append to `MarkdownRendererTest.java`:
+
+```java
+    @Test
+    void cluster_renders_behavior_signals_when_present() {
+        var target = new com.graphtipper.model.Node.Method("m_t", "T.target", "T.java", 1, 5, null, "", "");
+        var test1 = new com.graphtipper.model.Node.Method("m1", "T1.x", "T1.java", 1, 1, null, "", "");
+        var member = new com.graphtipper.slice.ClusterMember(test1, java.util.List.of(),
+                new com.graphtipper.slice.Oracle.None());
+        var sig = new com.graphtipper.slice.PathSignature(java.util.List.of("E.entry", "C.consumer", "target"));
+        var signals = java.util.List.of(
+                new com.graphtipper.slice.BehaviorSignal("arg1_propagates_to_oracle", "ev"),
+                new com.graphtipper.slice.BehaviorSignal("arg0_invariant_in_cluster", "all same"));
+        var cluster = new com.graphtipper.slice.PathCluster(sig, "E.entry", "C.consumer", 3,
+                java.util.List.of(member), signals);
+        var consumer = new com.graphtipper.slice.ConsumerContract(
+                "C.consumer", "F.java", 1, "body",
+                com.graphtipper.slice.ReturnValueUsage.empty(),
+                com.graphtipper.slice.ExceptionHandlingNearCall.none(),
+                java.util.List.of(), java.util.List.of(cluster), 1);
+        var artifact = new Artifact(target, "", java.util.List.of(), java.util.List.of(),
+                java.util.List.of(consumer), java.util.List.of(), false,
+                new com.graphtipper.slice.LocalContext(java.util.List.of(), java.util.List.of()));
+        var budget = new com.graphtipper.util.TokenBudget(20000); budget.charge(100);
+        String md = new MarkdownRenderer().render(artifact, budget, "abc", "proj");
+        assertThat(md).contains("Behavior signals");
+        assertThat(md).contains("arg1_propagates_to_oracle");
+        assertThat(md).contains("arg0_invariant_in_cluster");
+    }
+```
+
+- [ ] **Step 2: Run test to verify it fails**
+
+Run: `./gradlew test --tests com.graphtipper.render.MarkdownRendererTest -q`
+Expected: failure — signals don't render.
+
+- [ ] **Step 3: Extend `renderPathCluster`**
+
+In `MarkdownRenderer.java`, in `renderPathCluster`, after the matrix rendering block but before the closing `sb.append("\n");`, add:
+
+```java
+        if (!cluster.signals().isEmpty()) {
+            sb.append("**Behavior signals (from differential analysis):**\n");
+            for (var s : cluster.signals()) {
+                sb.append("- `").append(s.tag()).append("`");
+                if (s.evidence() != null && !s.evidence().isBlank()) {
+                    sb.append(": ").append(s.evidence());
+                }
+                sb.append("\n");
+            }
+            sb.append("\n");
+        }
+```
+
+Also, before rendering the matrix, handle the singleton case:
+
+```java
+        if (cluster.members().size() == 1) {
+            var only = cluster.members().get(0);
+            sb.append("**Single observation:** `").append(only.testMethod().fqn())
+              .append("` (").append(only.testMethod().file()).append(":")
+              .append(only.testMethod().lineStart()).append(")\n");
+            sb.append("**Args at target:** ").append(argRenderer.renderTuple(only.argsAtTarget())).append("\n");
+            sb.append("**Oracle:** ").append(renderOracle(only.oracle())).append("\n\n");
+            // Skip the matrix block; emit signals (if any) at the end.
+            if (!cluster.signals().isEmpty()) {
+                sb.append("**Behavior signals:**\n");
+                for (var s : cluster.signals()) sb.append("- `").append(s.tag()).append("`\n");
+                sb.append("\n");
+            }
+            return;
+        }
+```
+
+Place this `if (size==1)` block at the top of `renderPathCluster` right after the cluster header (after the `Depth` line and before the `members.isEmpty()` check is reused for member-loading). Adjust the existing matrix flow so it executes only when `members().size() >= 2`.
+
+- [ ] **Step 4: Run test to verify it passes**
+
+Run: `./gradlew test --tests com.graphtipper.render.MarkdownRendererTest -q`
+Expected: tests pass.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add src/main/java/com/graphtipper/render/MarkdownRenderer.java \
+        src/test/java/com/graphtipper/render/MarkdownRendererTest.java
+git commit -m "feat(render): cluster behavior-signal section + singleton compact rendering"
+```
+
+---
+
+## Task 30: `MarkdownRenderer.renderLongTail`
+
+**Files:**
+- Modify: `src/main/java/com/graphtipper/render/MarkdownRenderer.java`
+- Modify: `src/test/java/com/graphtipper/render/MarkdownRendererTest.java`
+
+- [ ] **Step 1: Write the failing test**
+
+Append to `MarkdownRendererTest.java`:
+
+```java
+    @Test
+    void long_tail_section_renders_one_line_summary() {
+        var target = new com.graphtipper.model.Node.Method("m_t", "T.target", "T.java", 1, 5, null, "", "");
+        var sig = new com.graphtipper.slice.PathSignature(java.util.List.of("E", "C", "target"));
+        var test1 = new com.graphtipper.model.Node.Method("m1", "T1.x", "T1.java", 1, 1, null, "", "");
+        var member = new com.graphtipper.slice.ClusterMember(test1, java.util.List.of(), new com.graphtipper.slice.Oracle.None());
+        var singleton1 = new com.graphtipper.slice.PathCluster(sig, "E", "C", 3, java.util.List.of(member), java.util.List.of());
+        var singleton2 = new com.graphtipper.slice.PathCluster(sig, "E", "C", 3, java.util.List.of(member), java.util.List.of());
+        var artifact = new Artifact(target, "", java.util.List.of(), java.util.List.of(), java.util.List.of(),
+                java.util.List.of(singleton1, singleton2), false,
+                new com.graphtipper.slice.LocalContext(java.util.List.of(), java.util.List.of()));
+        var budget = new com.graphtipper.util.TokenBudget(20000); budget.charge(100);
+        String md = new MarkdownRenderer().render(artifact, budget, "abc", "proj");
+        assertThat(md).contains("## Long tail");
+        assertThat(md).contains("2 additional uncovered singleton paths");
+    }
+```
+
+- [ ] **Step 2: Run test to verify it fails**
+
+Run: `./gradlew test --tests com.graphtipper.render.MarkdownRendererTest -q`
+Expected: failure — section missing.
+
+- [ ] **Step 3: Add `renderLongTail` to `MarkdownRenderer`**
+
+In `render(...)`, after `renderConsumerContracts(sb, a)`, add:
+
+```java
+        renderLongTail(sb, a);
+```
+
+Add the method:
+
+```java
+    private void renderLongTail(StringBuilder sb, Artifact a) {
+        int singletons = a.longTailSingletons().size();
+        if (singletons == 0) return;
+        sb.append("## Long tail\n\n");
+        sb.append(singletons).append(" additional uncovered singleton paths (each represents 1 chain). ");
+        sb.append("See `<hash>.json` → `clusters[].singletons` for the full list.\n\n");
+    }
+```
+
+- [ ] **Step 4: Run test to verify it passes**
+
+Run: `./gradlew test --tests com.graphtipper.render.MarkdownRendererTest -q`
+Expected: tests pass.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add src/main/java/com/graphtipper/render/MarkdownRenderer.java \
+        src/test/java/com/graphtipper/render/MarkdownRendererTest.java
+git commit -m "feat(render): renderLongTail one-line summary"
+```
+
+---
+
+## Task 31: Delete old `MarkdownRenderer.renderChains` and helpers
+
+**Files:**
+- Modify: `src/main/java/com/graphtipper/render/MarkdownRenderer.java`
+- Modify: `src/test/java/com/graphtipper/render/MarkdownRendererTest.java`
+
+- [ ] **Step 1: Update tests that assert the old "Test Chains" section**
+
+Open `src/test/java/com/graphtipper/render/MarkdownRendererTest.java`. Any test that asserts `## Test Chains` or `### Chain N` should be deleted or updated. Replace any reference to `## Test Chains` with `## Consumer contracts` and adjust the expected substrings to the new format.
+
+- [ ] **Step 2: Run tests to verify failures**
+
+Run: `./gradlew test --tests com.graphtipper.render.MarkdownRendererTest -q`
+Expected: some legacy tests fail.
+
+- [ ] **Step 3: Delete the legacy methods**
+
+In `MarkdownRenderer.java`:
+
+(a) In `render(...)`, delete the line `renderChains(sb, a);` (replaced by `renderConsumerContracts` + `renderLongTail`).
+
+(b) Delete the `renderChains` method entirely.
+
+(c) Delete the `stepKey` static helper.
+
+(d) Delete the `renderArgOrigin` static helper (it has been replaced by `ArgRenderer`).
+
+- [ ] **Step 4: Run all tests**
+
+Run: `./gradlew test -q`
+Expected: all tests pass.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add src/main/java/com/graphtipper/render/MarkdownRenderer.java \
+        src/test/java/com/graphtipper/render/MarkdownRendererTest.java
+git commit -m "refactor(render): remove legacy renderChains/stepKey/renderArgOrigin from MarkdownRenderer"
+```
+
+---
+
+## Task 32: `JsonRenderer` — bump schema to 2.0 + emit new sections
+
+**Files:**
+- Modify: `src/main/java/com/graphtipper/render/JsonRenderer.java`
+- Modify: `src/test/java/com/graphtipper/render/JsonRendererTest.java`
+
+- [ ] **Step 1: Update the test for v2 schema**
+
+Open `src/test/java/com/graphtipper/render/JsonRendererTest.java`. Replace or add assertions:
+
+```java
+    @Test
+    void json_schema_is_v2_and_contains_consumers_clusters_longtail() {
+        // Build a minimal Artifact with one consumer + one cluster + one direct test + one singleton.
+        var target = new com.graphtipper.model.Node.Method(
+                "m_t", "T.target", "T.java", 1, 5, null, "", "");
+        var testMethod = new com.graphtipper.model.Node.Method(
+                "m_test", "TC.t", "TC.java", 1, 1, null, "", "");
+        var directTest = new com.graphtipper.slice.DirectTest(
+                testMethod, java.util.List.of(), new com.graphtipper.slice.Oracle.None(), "@Test void t() {}");
+        var member = new com.graphtipper.slice.ClusterMember(testMethod, java.util.List.of(),
+                new com.graphtipper.slice.Oracle.Exception("X"));
+        var sig = new com.graphtipper.slice.PathSignature(java.util.List.of("E", "C", "target"));
+        var cluster = new com.graphtipper.slice.PathCluster(sig, "E", "C", 3, java.util.List.of(member), java.util.List.of());
+        var consumer = new com.graphtipper.slice.ConsumerContract(
+                "C", "F.java", 1, "body",
+                com.graphtipper.slice.ReturnValueUsage.empty(),
+                com.graphtipper.slice.ExceptionHandlingNearCall.none(),
+                java.util.List.of(), java.util.List.of(cluster), 1);
+        var singleton = new com.graphtipper.slice.PathCluster(sig, "E", "C", 3, java.util.List.of(member), java.util.List.of());
+        var artifact = new Artifact(target, "", java.util.List.of(),
+                java.util.List.of(directTest), java.util.List.of(consumer),
+                java.util.List.of(singleton), false,
+                new com.graphtipper.slice.LocalContext(java.util.List.of(), java.util.List.of()));
+
+        String json = new JsonRenderer().render(artifact);
+        assertThat(json).contains("\"schemaVersion\":\"2.0\"");
+        assertThat(json).contains("\"directTests\":");
+        assertThat(json).contains("\"consumers\":");
+        assertThat(json).contains("\"clusters\":");
+        assertThat(json).contains("\"longTail\":");
+        assertThat(json).doesNotContain("\"chains\":[{");  // top-level chains removed (still in graph.json)
+    }
+```
+
+- [ ] **Step 2: Run test to verify it fails**
+
+Run: `./gradlew test --tests com.graphtipper.render.JsonRendererTest -q`
+Expected: failure.
+
+- [ ] **Step 3: Rewrite `JsonRenderer.render`**
+
+Replace `src/main/java/com/graphtipper/render/JsonRenderer.java`:
+
+```java
+package com.graphtipper.render;
+
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ArrayNode;
+import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.graphtipper.slice.*;
+
+public final class JsonRenderer {
+
+    private final ObjectMapper mapper = new ObjectMapper();
+
+    public String render(Artifact a) {
+        ObjectNode root = mapper.createObjectNode();
+        root.put("schemaVersion", "2.0");
+
+        // Target
+        ObjectNode target = root.putObject("target");
+        target.put("fqn", a.target().fqn());
+        target.put("file", a.target().file());
+        target.put("lineStart", a.target().lineStart());
+        target.put("lineEnd", a.target().lineEnd());
+
+        // Direct tests
+        ArrayNode dts = root.putArray("directTests");
+        for (var dt : a.directTests()) {
+            ObjectNode o = dts.addObject();
+            o.put("fqn", dt.testMethod().fqn());
+            o.put("file", dt.testMethod().file());
+            o.put("line", dt.testMethod().lineStart());
+            o.put("snippet", dt.snippet());
+            renderArgs(o.putArray("args"), dt.args());
+            o.set("oracle", renderOracleNode(dt.oracle()));
+        }
+
+        // Consumers + clusters
+        ArrayNode consumers = root.putArray("consumers");
+        for (var c : a.consumers()) {
+            ObjectNode co = consumers.addObject();
+            co.put("fqn", c.consumerFqn());
+            co.put("file", c.file());
+            co.put("line", c.line());
+            co.put("chainsCovered", c.chainsCovered());
+            co.put("bodySlice", c.bodySlice());
+            ArrayNode kinds = co.putArray("returnValueUsageKinds");
+            for (var k : c.returnValueUsage().kinds()) kinds.add(k.name());
+            ArrayNode fields = co.putArray("returnValueFieldsRead");
+            for (var f : c.returnValueUsage().fieldsRead()) fields.add(f);
+            ObjectNode eh = co.putObject("exceptionHandling");
+            eh.put("inTryCatch", c.exceptionHandling().inTryCatch());
+            ArrayNode caught = eh.putArray("caughtTypes");
+            for (var t : c.exceptionHandling().caughtTypes()) caught.add(t);
+            ArrayNode imps = co.putArray("implications");
+            for (var i : c.implications()) imps.add(i.text());
+            ArrayNode cls = co.putArray("clusters");
+            for (var cluster : c.clusters()) cls.add(renderClusterNode(cluster));
+        }
+
+        // Long tail
+        ObjectNode lt = root.putObject("longTail");
+        lt.put("uncoveredSingletonCount", a.longTailSingletons().size());
+        ArrayNode lts = lt.putArray("singletons");
+        for (var s : a.longTailSingletons()) lts.add(renderClusterNode(s));
+
+        // Local context
+        ObjectNode lc = root.putObject("localContext");
+        ArrayNode sibs = lc.putArray("siblings");
+        for (var s : a.localContext().siblings()) {
+            ObjectNode o = sibs.addObject();
+            o.put("signature", s.signature());
+            if (s.javadoc() != null) o.put("javadoc", s.javadoc());
+            o.put("body", s.body());
+            o.put("truncated", s.truncated());
+        }
+
+        // Budget / truncated
+        root.put("truncated", a.truncated());
+
+        // Reserved
+        root.putObject("negativeMemory");
+
+        try {
+            return mapper.writerWithDefaultPrettyPrinter().writeValueAsString(root);
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    private ObjectNode renderClusterNode(PathCluster cluster) {
+        ObjectNode out = mapper.createObjectNode();
+        out.put("entryPoint", cluster.entryPoint());
+        out.put("immediateConsumer", cluster.immediateConsumer());
+        out.put("depth", cluster.depth());
+        out.put("chainsCovered", cluster.chainsCovered());
+        ArrayNode sig = out.putArray("pathSignature");
+        for (var fqn : cluster.signature().fqns()) sig.add(fqn);
+        ArrayNode members = out.putArray("members");
+        for (var m : cluster.members()) {
+            ObjectNode mo = members.addObject();
+            mo.put("testFqn", m.testMethod().fqn());
+            mo.put("file", m.testMethod().file());
+            mo.put("line", m.testMethod().lineStart());
+            renderArgs(mo.putArray("argsAtTarget"), m.argsAtTarget());
+            mo.set("oracle", renderOracleNode(m.oracle()));
+        }
+        ArrayNode sigs = out.putArray("behaviorSignals");
+        for (var s : cluster.signals()) {
+            ObjectNode so = sigs.addObject();
+            so.put("tag", s.tag());
+            so.put("evidence", s.evidence());
+        }
+        return out;
+    }
+
+    private void renderArgs(ArrayNode out, java.util.List<ArgOrigin> args) {
+        for (var a : args) {
+            ObjectNode o = out.addObject();
+            o.put("index", a.argIndex());
+            o.put("kind", a.kind().name());
+            if (a.value() != null) o.put("value", a.value());
+            if (a.exprText() != null) o.put("exprText", a.exprText());
+            if (a.paramName() != null) o.put("paramName", a.paramName());
+        }
+    }
+
+    private ObjectNode renderOracleNode(Oracle o) {
+        ObjectNode out = mapper.createObjectNode();
+        switch (o) {
+            case Oracle.Equals eq -> { out.put("kind", "Equals"); out.put("expected", eq.expected()); out.put("actualExpr", eq.actualExpr()); }
+            case Oracle.Exception ex -> { out.put("kind", "Exception"); out.put("type", ex.type()); }
+            case Oracle.ExceptionMessage em -> { out.put("kind", "ExceptionMessage"); out.put("type", em.type()); out.put("matchKind", em.kind().name()); out.put("message", em.message()); }
+            case Oracle.Boolean b -> { out.put("kind", "Boolean"); out.put("expected", b.expected()); out.put("expr", b.expr()); }
+            case Oracle.Nullability n -> { out.put("kind", "Nullability"); out.put("expectNonNull", n.expectNonNull()); out.put("expr", n.expr()); }
+            case Oracle.Contains c -> { out.put("kind", "Contains"); out.put("expr", c.expr()); out.put("substring", c.substring()); }
+            case Oracle.None __ -> out.put("kind", "None");
+        }
+        return out;
+    }
+}
+```
+
+(Adjust calls to `ArgOrigin` API based on the actual record members — `value()`, `exprText()`, `paramName()`, `argIndex()`, `kind()`.)
+
+- [ ] **Step 4: Run test to verify it passes**
+
+Run: `./gradlew test --tests com.graphtipper.render.JsonRendererTest -q`
+Expected: tests pass.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add src/main/java/com/graphtipper/render/JsonRenderer.java \
+        src/test/java/com/graphtipper/render/JsonRendererTest.java
+git commit -m "feat(render): JsonRenderer schema v2.0 (directTests, consumers, clusters, longTail)"
+```
+
+---
+
+> **Remaining tasks (33–37) continue below.** Each follows the same TDD template.
 
 ---
 
