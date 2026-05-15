@@ -34,6 +34,14 @@ public final class DifferentialAnalyzer {
                         "All " + cluster.members().size() + " members share arg" + i));
             }
         }
+        for (int i = 0; i < argCount; i++) {
+            if (isInvariantAt(cluster.members(), i)) continue; // varying args only
+            if (propagatesToOracle(cluster.members(), i)) {
+                out.add(new BehaviorSignal(
+                        "arg" + i + "_propagates_to_oracle",
+                        "Substring of arg" + i + " appears in oracle text for ≥2 distinct values"));
+            }
+        }
         return out;
     }
 
@@ -51,5 +59,44 @@ public final class DifferentialAnalyzer {
             if (rendered.size() > 1) return false;
         }
         return rendered.size() == 1;
+    }
+
+    private boolean propagatesToOracle(List<ClusterMember> members, int idx) {
+        int matches = 0;
+        Set<String> distinctValues = new HashSet<>();
+        for (var m : members) {
+            if (idx >= m.argsAtTarget().size()) continue;
+            var origin = m.argsAtTarget().get(idx);
+            String val = origin.value();  // literal value, unquoted-ish — for string literals JavaParser may include the quotes
+            if (val == null) continue;
+            String unquoted = stripQuotes(val);
+            if (unquoted.length() < 3) continue;  // min length threshold
+            String oracleText = oracleText(m.oracle());
+            if (oracleText == null) continue;
+            if (oracleText.contains(unquoted)) {
+                matches++;
+                distinctValues.add(unquoted);
+            }
+        }
+        return matches >= 2 && distinctValues.size() >= 2;
+    }
+
+    private static String stripQuotes(String s) {
+        if (s.length() >= 2 && s.charAt(0) == '"' && s.charAt(s.length() - 1) == '"') {
+            return s.substring(1, s.length() - 1);
+        }
+        return s;
+    }
+
+    private static String oracleText(Oracle o) {
+        return switch (o) {
+            case Oracle.ExceptionMessage em -> em.message();
+            case Oracle.Equals eq -> eq.expected();
+            case Oracle.Contains co -> co.substring();
+            case Oracle.Exception ex -> ex.type();
+            case Oracle.Boolean __ -> null;
+            case Oracle.Nullability __ -> null;
+            case Oracle.None __ -> null;
+        };
     }
 }
