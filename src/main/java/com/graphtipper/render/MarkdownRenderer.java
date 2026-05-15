@@ -32,6 +32,7 @@ public final class MarkdownRenderer {
         renderTarget(sb, a);
         renderDirectTests(sb, a);
         renderConsumerContracts(sb, a);
+        renderLongTail(sb, a);
         renderChains(sb, a);
         renderLocalContext(sb, a);
         sb.append("## Negative Memory\n_(reserved — not populated in V1)_\n");
@@ -336,6 +337,14 @@ public final class MarkdownRenderer {
         int prev = Math.max(prevDot, prevDollar);
         // If no previous separator: fqn is already "ClassName.method" — return as-is
         return prev < 0 ? fqn : fqn.substring(prev + 1, lastDot) + "." + simple;
+    }
+
+    private void renderLongTail(StringBuilder sb, Artifact a) {
+        int singletons = a.longTailSingletons().size();
+        if (singletons == 0) return;
+        sb.append("## Long tail\n\n");
+        sb.append(singletons).append(" additional uncovered singleton paths (each represents 1 chain). ");
+        sb.append("See `<hash>.json` → `clusters[].singletons` for the full list.\n\n");
     }
 
     private static String escapePipes(String s) { return s.replace("|", "\\|"); }

@@ -97,6 +97,25 @@ class MarkdownRendererTest {
     }
 
     @Test
+    void long_tail_section_renders_one_line_summary() {
+        var target = new com.graphtipper.model.Node.Method("m_t", "T.target", "T.target",
+                java.util.List.of(), "void", "T.java", 1, 5, null, false, false, java.util.List.of());
+        var sig = new com.graphtipper.slice.PathSignature(java.util.List.of("E", "C", "target"));
+        var test1 = new com.graphtipper.model.Node.Method("m1", "T1.x", "T1.x",
+                java.util.List.of(), "void", "T1.java", 1, 1, null, true, false, java.util.List.of());
+        var member = new com.graphtipper.slice.ClusterMember(test1, java.util.List.of(), new com.graphtipper.slice.Oracle.None());
+        var singleton1 = new com.graphtipper.slice.PathCluster(sig, "E", "C", 3, java.util.List.of(member), java.util.List.of());
+        var singleton2 = new com.graphtipper.slice.PathCluster(sig, "E", "C", 3, java.util.List.of(member), java.util.List.of());
+        var artifact = new Artifact(target, "", java.util.List.of(), java.util.List.of(), java.util.List.of(),
+                java.util.List.of(singleton1, singleton2), false,
+                new com.graphtipper.slice.LocalContext(java.util.List.of(), java.util.List.of()));
+        var budget = new com.graphtipper.util.TokenBudget(20000); budget.charge(100);
+        String md = new MarkdownRenderer().render(artifact, budget, "abc", "proj");
+        assertThat(md).contains("## Long tail");
+        assertThat(md).contains("2 additional uncovered singleton paths");
+    }
+
+    @Test
     void cluster_renders_behavior_signals_when_present() {
         var target = new com.graphtipper.model.Node.Method("m_t", "T.target", "T.target",
                 java.util.List.of(), "void", "T.java", 1, 5, null, false, false, java.util.List.of());
