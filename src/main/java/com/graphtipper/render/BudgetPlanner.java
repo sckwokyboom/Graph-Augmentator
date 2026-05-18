@@ -23,16 +23,26 @@ public final class BudgetPlanner {
 
     /**
      * Returns an Artifact rewritten to fit within {@code tokenBudget}. Eviction
-     * order per spec §7.2:
+     * order:
      * <ol>
      *   <li>Move low-rank clusters (chainsCovered ≤ 1) to {@code longTailSingletons}.</li>
-     *   <li>Trim differential-matrix rows to at most 3 per cluster.</li>
      *   <li>Truncate behavior-signal evidence strings to 40 chars.</li>
-     *   <li>Drop non-primary snippets (placeholder — no per-member snippets yet).</li>
      *   <li>Drop all but the top consumer block.</li>
+     *   <li>Truncate sibling bodies in local context to {@code "// truncated"}.</li>
+     *   <li>Drop entire local context.</li>
      * </ol>
      * Throws {@link BudgetExceededException} if even the protected minimum exceeds
      * the budget.
+     *
+     * <p>Removed from earlier revisions (caused inconsistencies or were no-ops for v2):
+     * <ul>
+     *   <li>trimMatrixRows: redundant with the renderer's built-in 5-row cap, and trimming
+     *       {@code members} broke the consistency between {@code cluster.chainsCovered()}
+     *       and behavior-signal evidence text (which referred to original sizes).</li>
+     *   <li>stripChainArgOrigins / dropAllChains: the v2 MarkdownRenderer doesn't render
+     *       {@code Artifact.chains()} at all — those bytes don't show in the output, so
+     *       dropping them couldn't fix an overflow.</li>
+     * </ul>
      *
      * @param a           the artifact to fit
      * @param tokenBudget the maximum token budget
@@ -40,94 +50,46 @@ public final class BudgetPlanner {
      */
     public Artifact fit(Artifact a, TokenBudget tokenBudget) {
         Artifact cur = a;
-        if (fitEstimate(cur, tokenBudget) <= tokenBudget.max()) return cur;
+        if (fitEstimate(cur) <= tokenBudget.max()) return cur;
 
-        // Step 1: move low-rank and singleton clusters to longTailSingletons.
         cur = evictLowRankAndSingletonClusters(cur);
-        if (fitEstimate(cur, tokenBudget) <= tokenBudget.max()) return cur;
+        if (fitEstimate(cur) <= tokenBudget.max()) return cur;
 
-        // Step 2: trim matrix rows to 3 per cluster.
-        cur = trimMatrixRows(cur, 3);
-        if (fitEstimate(cur, tokenBudget) <= tokenBudget.max()) return cur;
-
-        // Step 3: truncate signal evidence to 40 chars.
         cur = truncateSignalEvidence(cur, 40);
-        if (fitEstimate(cur, tokenBudget) <= tokenBudget.max()) return cur;
+        if (fitEstimate(cur) <= tokenBudget.max()) return cur;
 
-        // Step 4: drop non-primary snippets (no-op until per-member snippets exist).
-        cur = dropNonPrimarySnippets(cur);
-        if (fitEstimate(cur, tokenBudget) <= tokenBudget.max()) return cur;
-
-        // Step 5: drop all but top consumer block.
         cur = dropLowRankConsumers(cur);
-        if (fitEstimate(cur, tokenBudget) <= tokenBudget.max()) return cur;
+        if (fitEstimate(cur) <= tokenBudget.max()) return cur;
 
-        // Step 6: truncate sibling bodies in local context (replace with "// truncated").
         cur = truncateSiblingBodies(cur);
-        if (fitEstimate(cur, tokenBudget) <= tokenBudget.max()) return cur;
+        if (fitEstimate(cur) <= tokenBudget.max()) return cur;
 
-        // Step 7: drop entire local context.
         cur = dropLocalContext(cur);
-        if (fitEstimate(cur, tokenBudget) <= tokenBudget.max()) return cur;
+        if (fitEstimate(cur) <= tokenBudget.max()) return cur;
 
-        // Step 8: drop legacy chain arg-origin detail (keep only snippet text).
-        cur = stripChainArgOrigins(cur);
-        if (fitEstimate(cur, tokenBudget) <= tokenBudget.max()) return cur;
-
-        // Step 9: drop all legacy chains entirely.
-        cur = dropAllChains(cur);
-        if (fitEstimate(cur, tokenBudget) <= tokenBudget.max()) return cur;
-
-        // Protected minimum check.
         Artifact min = protectedMinimum(cur);
-        if (fitEstimate(min, tokenBudget) > tokenBudget.max()) {
+        int minTokens = fitEstimate(min);
+        if (minTokens > tokenBudget.max()) {
             throw new BudgetExceededException(
-                    "Protected minimum requires " + fitEstimate(min, tokenBudget)
+                    "Protected minimum requires " + minTokens
                     + " tokens, budget=" + tokenBudget.max());
         }
-        return cur;
+        return min;
     }
 
-    /** Rough token estimate: render all text content of the artifact and divide by 4. */
-    private int fitEstimate(Artifact a, TokenBudget budget) {
-        var sb = new StringBuilder();
-        // target
-        sb.append(a.target().fqn()).append(a.target().signature()).append(a.currentBody());
-        if (a.target().javadoc() != null) sb.append(a.target().javadoc());
-        // legacy chains
-        for (Chain ch : a.chains()) {
-            for (CallStep s : ch.steps()) {
-                if (s.snippet() != null) sb.append(s.snippet());
-                for (ArgOrigin o : s.argOrigins()) sb.append(o.toString());
-            }
-        }
-        // consumers and clusters
-        for (ConsumerContract c : a.consumers()) {
-            sb.append(c.consumerFqn()).append(c.bodySlice());
-            for (PathCluster cl : c.clusters()) {
-                sb.append(cl.entryPoint()).append(cl.immediateConsumer());
-                for (ClusterMember m : cl.members()) {
-                    sb.append(m.testMethod().fqn());
-                    for (ArgOrigin o : m.argsAtTarget()) sb.append(o.toString());
-                }
-                for (BehaviorSignal sig : cl.signals()) {
-                    sb.append(sig.tag());
-                    if (sig.evidence() != null) sb.append(sig.evidence());
-                }
-            }
-        }
-        // long-tail singletons
-        for (PathCluster cl : a.longTailSingletons()) {
-            sb.append(cl.entryPoint());
-            for (ClusterMember m : cl.members()) sb.append(m.testMethod().fqn());
-        }
-        // local context
-        for (var s : a.localContext().siblings()) sb.append(s.signature()).append(s.body());
-        for (var u : a.localContext().usedTypes()) {
-            sb.append(u.type().fqn());
-            for (String sig : u.publicMethodSignatures()) sb.append(sig);
-        }
-        return budget.estimate(sb.toString());
+    /**
+     * Accurate token estimate: render the artifact via {@link MarkdownRenderer} with an
+     * unlimited sandbox budget and divide rendered char count by 4. This guarantees the
+     * estimate matches what is actually written to disk — earlier revisions used a
+     * hand-rolled accumulator that diverged from the renderer (it counted legacy
+     * {@code chains[]} content that the v2 renderer doesn't emit, causing aggressive
+     * over-counting that triggered unnecessary {@code LocalContext} eviction even when
+     * the real artifact fit comfortably).
+     */
+    private int fitEstimate(Artifact a) {
+        TokenBudget sandbox = new TokenBudget(Integer.MAX_VALUE);
+        String md = new MarkdownRenderer().render(a, sandbox, "x", "x");
+        return sandbox.estimate(md);
     }
 
     /**
@@ -150,24 +112,6 @@ public final class BudgetPlanner {
         }
         return new Artifact(a.target(), a.currentBody(), a.chains(),
                 a.directTests(), newConsumers, demoted, a.truncated(), a.localContext());
-    }
-
-    /** Trims each cluster's member list to at most {@code rowCap} entries. */
-    private Artifact trimMatrixRows(Artifact a, int rowCap) {
-        var newConsumers = new ArrayList<ConsumerContract>();
-        for (ConsumerContract c : a.consumers()) {
-            var trimmed = new ArrayList<PathCluster>();
-            for (PathCluster cluster : c.clusters()) {
-                int keep = Math.min(rowCap, cluster.members().size());
-                trimmed.add(cluster.withMembers(cluster.members().subList(0, keep)));
-            }
-            newConsumers.add(new ConsumerContract(
-                    c.consumerFqn(), c.file(), c.line(), c.bodySlice(),
-                    c.returnValueUsage(), c.exceptionHandling(),
-                    c.implications(), trimmed, c.chainsCovered()));
-        }
-        return new Artifact(a.target(), a.currentBody(), a.chains(),
-                a.directTests(), newConsumers, a.longTailSingletons(), a.truncated(), a.localContext());
     }
 
     /** Truncates each {@link BehaviorSignal}'s evidence string to {@code charLimit} characters. */
@@ -195,39 +139,12 @@ public final class BudgetPlanner {
                 a.directTests(), newConsumers, a.longTailSingletons(), a.truncated(), a.localContext());
     }
 
-    /**
-     * Placeholder for dropping non-primary per-member snippets. Currently a no-op
-     * because {@link ClusterMember} does not yet carry an explicit snippet field.
-     */
-    private Artifact dropNonPrimarySnippets(Artifact a) {
-        return a;
-    }
-
     /** Keeps only the first (highest-ranked) consumer; marks artifact as truncated. */
     private Artifact dropLowRankConsumers(Artifact a) {
         if (a.consumers().size() <= 1) return a;
         var kept = a.consumers().subList(0, 1);
         return new Artifact(a.target(), a.currentBody(), a.chains(),
                 a.directTests(), kept, a.longTailSingletons(),
-                /*truncated=*/true, a.localContext());
-    }
-
-    /** Strips arg-origin detail from legacy chains, retaining only step snippets. */
-    private Artifact stripChainArgOrigins(Artifact a) {
-        var stripped = new java.util.ArrayList<Chain>();
-        for (Chain ch : a.chains()) {
-            var newSteps = new java.util.ArrayList<CallStep>();
-            for (CallStep s : ch.steps()) newSteps.add(s.withEnrichment(s.snippet(), java.util.List.of()));
-            stripped.add(new Chain(ch.test(), newSteps, ch.virtualSteps()));
-        }
-        return new Artifact(a.target(), a.currentBody(), stripped,
-                a.directTests(), a.consumers(), a.longTailSingletons(), a.truncated(), a.localContext());
-    }
-
-    /** Drops all legacy chains from the artifact. */
-    private Artifact dropAllChains(Artifact a) {
-        return new Artifact(a.target(), a.currentBody(), java.util.List.of(),
-                a.directTests(), a.consumers(), a.longTailSingletons(),
                 /*truncated=*/true, a.localContext());
     }
 
@@ -284,12 +201,15 @@ public final class BudgetPlanner {
     }
 
     /**
-     * Charge the meter for an artifact without evicting any content. Used by
-     * {@code --no-budget}: the rendered header still reports how many tokens the
-     * full artifact costs, but nothing is dropped.
+     * Charges the meter for the artifact's actual rendered cost without evicting
+     * any content. Uses the same renderer-based estimate as {@link #fit} so the
+     * header's {@code budget.used()} reflects the real file size that will be
+     * written to disk (not just the legacy v1 charge() which was missing direct
+     * tests, consumer blocks, clusters, and signals).
      */
     public void planNoEvict(Artifact a) {
-        charge(a);
+        if (budget == null) return;
+        budget.charge(fitEstimate(a));
     }
 
     public Artifact plan(Artifact a) {

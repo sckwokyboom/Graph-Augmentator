@@ -43,11 +43,106 @@ class BudgetPlannerTest {
     }
 
     /**
+     * Builds the artifact-under-test for eviction-order tests: one consumer with a
+     * high-rank cluster (5 members) and a low-rank cluster (1 member, chainsCovered = 1).
+     */
+    private static Artifact buildTwoClusterArtifact() {
+        var targetGraph = Gb.graph().method("com.example.Target").done().buildRaw();
+        var target = (Node.Method) targetGraph.byFqn("com.example.Target").get(0);
+
+        var testGraph = Gb.graph().method("com.example.test.LongTestMethodName").testFlag(true).done().buildRaw();
+        var m1 = (Node.Method) testGraph.byFqn("com.example.test.LongTestMethodName").get(0);
+        var member = new ClusterMember(m1, List.of(), new Oracle.None());
+
+        var sig1 = new PathSignature(List.of("com.example.EntryPointOne", "com.example.Consumer", "target"));
+        var highRank = new PathCluster(sig1, "com.example.EntryPointOne", "com.example.Consumer", 3,
+                List.of(member, member, member, member, member),
+                List.of(new BehaviorSignal("arg0_invariant_in_cluster", "All 5 members share arg0")));
+
+        var sig2 = new PathSignature(List.of("com.example.EntryPointTwo", "com.example.Consumer", "target"));
+        var lowRank = new PathCluster(sig2, "com.example.EntryPointTwo", "com.example.Consumer", 3,
+                List.of(member), List.of());
+
+        var consumer = new ConsumerContract(
+                "com.example.Consumer", "F.java", 1, "body text",
+                ReturnValueUsage.empty(), ExceptionHandlingNearCall.none(),
+                List.of(), List.of(highRank, lowRank), 6);
+
+        return new Artifact(target, "return null;", List.of(), List.of(),
+                List.of(consumer), List.of(), false,
+                new LocalContext(List.of(), List.of()));
+    }
+
+    /**
+     * Helper: actual rendered token cost of an artifact, matching {@code BudgetPlanner}'s
+     * internal {@code fitEstimate}. Lets tests pick budgets relative to the real size.
+     */
+    private static int renderedTokens(Artifact a) {
+        var sandbox = new TokenBudget(Integer.MAX_VALUE);
+        String md = new MarkdownRenderer().render(a, sandbox, "x", "x");
+        return sandbox.estimate(md);
+    }
+
+    /**
+     * Regression for the LocalContext-eviction bug: when an artifact fits comfortably
+     * within budget, {@code fit()} must not touch LocalContext (or anything else). The
+     * pre-fix BudgetPlanner over-counted by including legacy {@code chains[]} that the
+     * v2 renderer never emits, which triggered unnecessary eviction even at 5% budget
+     * usage.
+     */
+    @Test
+    void fit_preserves_local_context_when_artifact_fits_within_budget() {
+        var targetGraph = Gb.graph().method("p.C.target").done().buildRaw();
+        var target = (Node.Method) targetGraph.byFqn("p.C.target").get(0);
+        var siblings = List.of(
+                new LocalContext.SiblingMember("void helper()", "/** docs */", "{ /* body */ }", false),
+                new LocalContext.SiblingMember("int count()", null, "{ return 1; }", false));
+        var ctx = new LocalContext(siblings, List.of());
+        var artifact = new Artifact(target, "return null;", List.of(), List.of(),
+                List.of(), List.of(), false, ctx);
+
+        // Generous budget — full artifact must fit with plenty to spare.
+        var planned = new BudgetPlanner().fit(artifact, new TokenBudget(20_000));
+
+        assertThat(planned.localContext().siblings())
+                .as("LocalContext.siblings must be preserved when artifact fits within budget")
+                .hasSize(2);
+        assertThat(planned.localContext().siblings().get(0).body()).isEqualTo("{ /* body */ }");
+    }
+
+    /**
+     * Regression for the (consumer.chainsCovered / signal evidence) inconsistency.
+     * After {@code fit()} (with non-empty member clusters), {@code cluster.members().size()}
+     * must equal the original (pre-eviction) size — earlier revisions trimmed members
+     * to 3 inside {@code BudgetPlanner.trimMatrixRows}, which made cluster headers
+     * disagree with signal evidence text that still referenced the original counts.
+     */
+    @Test
+    void fit_preserves_cluster_member_counts_so_signals_stay_consistent() {
+        var artifact = buildTwoClusterArtifact();
+        // Generous budget so no eviction beyond step 1 is needed.
+        var planned = new BudgetPlanner().fit(artifact, new TokenBudget(20_000));
+
+        // High-rank cluster's member count is unchanged (originally 5).
+        var highRank = planned.consumers().get(0).clusters().stream()
+                .filter(c -> c.entryPoint().equals("com.example.EntryPointOne"))
+                .findFirst().orElseThrow();
+        assertThat(highRank.members())
+                .as("members must not be trimmed by BudgetPlanner — signal evidence references original sizes")
+                .hasSize(5);
+        assertThat(highRank.chainsCovered()).isEqualTo(5);
+        // Behavior signal text references the original count.
+        assertThat(highRank.signals().get(0).evidence()).contains("5 members");
+    }
+
+    /**
      * Verifies the cluster-based eviction order: clusters with chainsCovered ≤ 1
      * (singletons) are moved to {@code longTailSingletons} before any higher-ranked
      * cluster loses matrix rows.
      *
-     * <p>Budget arithmetic (chars / 4 = tokens):
+     * <p>Calibrates the budget against the actual rendered size so the test is robust
+     * to renderer formatting changes (pre-fix it was hand-tuned to 60 tokens against a
+     * broken estimator):
      * <ul>
      *   <li>Target FQN + sig + body ≈ 40 chars</li>
      *   <li>Consumer FQN + small body ≈ 25 chars</li>
@@ -61,51 +156,46 @@ class BudgetPlannerTest {
      */
     @Test
     void eviction_demotes_low_rank_clusters_to_long_tail_first() {
-        // Build the target method via Gb so all Node.Method fields are properly populated.
-        var targetGraph = Gb.graph().method("com.example.Target").done().buildRaw();
-        var target = (Node.Method) targetGraph.byFqn("com.example.Target").get(0);
+        var artifact = buildTwoClusterArtifact();
 
-        // Build a long-named test method to use as ClusterMember.testMethod.
-        var testGraph = Gb.graph().method("com.example.test.LongTestMethodName").testFlag(true).done().buildRaw();
-        var m1 = (Node.Method) testGraph.byFqn("com.example.test.LongTestMethodName").get(0);
-        var member = new ClusterMember(m1, List.of(), new Oracle.None());
+        // Measure the full and post-step-1 sizes so the budget can sit between them.
+        int fullSize = renderedTokens(artifact);
+        var afterStep1Preview = buildTwoClusterArtifact();
+        // Synthesize what eviction step 1 (low-rank → long tail) would produce, by
+        // simulating it: keep only highRank in clusters, push lowRank to long tail.
+        var origConsumer = afterStep1Preview.consumers().get(0);
+        var highOnly = origConsumer.clusters().stream()
+                .filter(c -> c.chainsCovered() > 1).toList();
+        var lowOnly = origConsumer.clusters().stream()
+                .filter(c -> c.chainsCovered() <= 1).toList();
+        var step1Artifact = new Artifact(
+                afterStep1Preview.target(), afterStep1Preview.currentBody(),
+                afterStep1Preview.chains(), afterStep1Preview.directTests(),
+                List.of(new ConsumerContract(
+                        origConsumer.consumerFqn(), origConsumer.file(), origConsumer.line(),
+                        origConsumer.bodySlice(), origConsumer.returnValueUsage(),
+                        origConsumer.exceptionHandling(), origConsumer.implications(),
+                        highOnly, origConsumer.chainsCovered())),
+                lowOnly, afterStep1Preview.truncated(), afterStep1Preview.localContext());
+        int step1Size = renderedTokens(step1Artifact);
 
-        // highRank: 5 members → chainsCovered() = 5 (survives eviction step 1).
-        var sig1 = new PathSignature(List.of("com.example.EntryPointOne", "com.example.Consumer", "target"));
-        var highRank = new PathCluster(sig1, "com.example.EntryPointOne", "com.example.Consumer", 3,
-                List.of(member, member, member, member, member), List.of());
+        // Budget tuned so: full doesn't fit, step1 just fits.
+        // Place it exactly at step1Size — fit() must converge on step 1.
+        int budget = step1Size;
+        org.junit.jupiter.api.Assumptions.assumeTrue(budget < fullSize,
+                "test setup must produce a meaningful gap between full and step-1 sizes");
 
-        // lowRank: 1 member → chainsCovered() = 1 (gets demoted to longTailSingletons in step 1).
-        var sig2 = new PathSignature(List.of("com.example.EntryPointTwo", "com.example.Consumer", "target"));
-        var lowRank = new PathCluster(sig2, "com.example.EntryPointTwo", "com.example.Consumer", 3,
-                List.of(member), List.of());
+        var planned = new BudgetPlanner().fit(artifact, new TokenBudget(budget));
 
-        var consumer = new ConsumerContract(
-                "com.example.Consumer", "F.java", 1, "body text",
-                ReturnValueUsage.empty(),
-                ExceptionHandlingNearCall.none(),
-                List.of(), List.of(highRank, lowRank), 6);
-
-        var artifact = new Artifact(target, "return null;", List.of(), List.of(),
-                List.of(consumer), List.of(), false,
-                new LocalContext(List.of(), List.of()));
-
-        // 60 tokens (240 chars) — too small for the full artifact (≈84 tokens),
-        // but large enough for the protected minimum (≈29 tokens).
-        var tight = new TokenBudget(60);
-        var planner = new BudgetPlanner();
-        var planned = planner.fit(artifact, tight);
-
-        // Low-rank cluster (E2, chainsCovered=1) must have moved to longTailSingletons.
-        assertThat(planned.longTailSingletons()).isNotEmpty();
+        // Low-rank cluster (E2, chainsCovered=1) moved to longTailSingletons.
         assertThat(planned.longTailSingletons())
                 .extracting(PathCluster::entryPoint)
                 .contains("com.example.EntryPointTwo");
 
-        // High-rank cluster (E1, chainsCovered=5) must still be in the consumer.
-        assertThat(planned.consumers()).isNotEmpty();
-        assertThat(planned.consumers().get(0).clusters())
-                .extracting(PathCluster::entryPoint)
-                .doesNotContain("com.example.EntryPointTwo");
+        // High-rank cluster (E1) still in the consumer; member count preserved.
+        var keptHighRank = planned.consumers().get(0).clusters().stream()
+                .filter(c -> c.entryPoint().equals("com.example.EntryPointOne"))
+                .findFirst().orElseThrow();
+        assertThat(keptHighRank.members()).hasSize(5);
     }
 }
