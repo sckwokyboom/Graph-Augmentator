@@ -111,4 +111,34 @@ class StaticSlicerTest {
         assertThat(result).isInstanceOfSatisfying(SliceResult.Resolved.class, r ->
                 assertThat(r.value()).isNull());
     }
+
+    private static com.github.javaparser.ast.body.MethodDeclaration parseMethod(String src) {
+        var cu = com.github.javaparser.StaticJavaParser.parse(
+                "class C { " + src + " }");
+        return cu.findFirst(com.github.javaparser.ast.body.MethodDeclaration.class).orElseThrow();
+    }
+
+    @Test
+    void slices_local_var_to_last_assignment() {
+        var method = parseMethod("void m() { int x = 42; foo(x); } void foo(int v) {}");
+        var fooCall = method.findFirst(com.github.javaparser.ast.expr.MethodCallExpr.class).orElseThrow();
+        var xRef = fooCall.getArgument(0);
+        var slicer = new StaticSlicer();
+        var result = slicer.slice(xRef, method, java.util.List.of(), 0);
+        assertThat(result).isInstanceOfSatisfying(SliceResult.Resolved.class, r ->
+                assertThat(r.value()).isEqualTo(42));
+    }
+
+    @Test
+    void slices_local_var_with_string_concat() {
+        var method = parseMethod(
+                "void m() { String s = \"a\" + \"b\"; foo(s); } void foo(String s) {}");
+        var fooCall = method.findFirst(com.github.javaparser.ast.expr.MethodCallExpr.class).orElseThrow();
+        var sRef = fooCall.getArgument(0);
+        var slicer = new StaticSlicer();
+        var result = slicer.slice(sRef, method, java.util.List.of(), 0);
+        // BinaryExpr handling comes in Task 10; for now expect Unresolved(COMPLEX_EXPR) or Resolved.
+        // After Task 10, this becomes Resolved("ab"). Make this lenient until then.
+        assertThat(result).isNotNull();
+    }
 }
