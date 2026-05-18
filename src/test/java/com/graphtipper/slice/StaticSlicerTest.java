@@ -23,4 +23,31 @@ class StaticSlicerTest {
                         UnresolvedReason.FILE_TOO_LARGE,
                         UnresolvedReason.UNSUPPORTED);
     }
+
+    @Test
+    void sliceResult_variants_construct_correctly() {
+        var r = new SliceResult.Resolved("abc");
+        assertThat(r.value()).isEqualTo("abc");
+
+        var u = new SliceResult.Unresolved(UnresolvedReason.FIELD_READ, "this.x");
+        assertThat(u.reason()).isEqualTo(UnresolvedReason.FIELD_READ);
+        assertThat(u.detail()).isEqualTo("this.x");
+
+        var d = new SliceResult.Derived(
+                SliceResult.DerivedKind.ARRAY_LITERAL,
+                java.util.List.of(new SliceResult.Resolved("a"), new SliceResult.Resolved("b")));
+        assertThat(d.kind()).isEqualTo(SliceResult.DerivedKind.ARRAY_LITERAL);
+        assertThat(d.parts()).hasSize(2);
+
+        var lv = new SliceResult.LoopVar("i", "0..N-1");
+        assertThat(lv.name()).isEqualTo("i");
+        assertThat(lv.range()).isEqualTo("0..N-1");
+
+        var pf = new SliceResult.ParamFromCaller(new SliceResult.Resolved("hi"));
+        assertThat(pf.callerSlice()).isInstanceOf(SliceResult.Resolved.class);
+
+        var bu = new SliceResult.BranchUnion(java.util.List.of(
+                new SliceResult.Resolved("a"), new SliceResult.Resolved("b")));
+        assertThat(bu.branches()).hasSize(2);
+    }
 }
