@@ -214,4 +214,35 @@ class StaticSlicerTest {
             assertThat(d.parts()).hasSize(2);
         });
     }
+
+    @Test
+    void slices_binary_string_concat_with_both_resolved() {
+        var expr = com.github.javaparser.StaticJavaParser.parseExpression("\"a\" + \"b\"");
+        var slicer = new StaticSlicer();
+        var result = slicer.slice(expr, null, java.util.List.of(), 0);
+        assertThat(result).isInstanceOfSatisfying(SliceResult.Resolved.class, r ->
+                assertThat(r.value()).isEqualTo("ab"));
+    }
+
+    @Test
+    void slices_binary_arithmetic_with_both_resolved() {
+        var expr = com.github.javaparser.StaticJavaParser.parseExpression("10 + 5");
+        var slicer = new StaticSlicer();
+        var result = slicer.slice(expr, null, java.util.List.of(), 0);
+        assertThat(result).isInstanceOfSatisfying(SliceResult.Resolved.class, r ->
+                assertThat(r.value()).isEqualTo(15L));
+    }
+
+    @Test
+    void slices_binary_partial_concat_to_derived() {
+        var method = parseMethod(
+                "void m() { foo(this.x + \"!\"); } void foo(String s) {}");
+        var fooCall = method.findFirst(com.github.javaparser.ast.expr.MethodCallExpr.class).orElseThrow();
+        var binExpr = fooCall.getArgument(0);
+        var slicer = new StaticSlicer();
+        var result = slicer.slice(binExpr, method, java.util.List.of(), 0);
+        // One side unresolved (field-read), other resolved — emit Derived(CONCATENATION).
+        assertThat(result).isInstanceOfSatisfying(SliceResult.Derived.class, d ->
+                assertThat(d.kind()).isEqualTo(SliceResult.DerivedKind.CONCATENATION));
+    }
 }

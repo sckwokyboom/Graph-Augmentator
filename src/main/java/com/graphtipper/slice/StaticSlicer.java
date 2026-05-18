@@ -87,6 +87,9 @@ public final class StaticSlicer {
             return new SliceResult.Derived(SliceResult.DerivedKind.ARRAY_ACCESS,
                     java.util.List.of(arraySlice, idxSlice));
         }
+        if (expr instanceof BinaryExpr be) {
+            return handleBinary(be, method, callChain, depth);
+        }
         // Tasks 6–14 expand this switch.
         return new SliceResult.Unresolved(UnresolvedReason.UNSUPPORTED,
                 expr.getClass().getSimpleName());
@@ -154,5 +157,42 @@ public final class StaticSlicer {
         Expression actualArg = call.getArgument(paramIdx);
         SliceResult callerSlice = slice(actualArg, caller, rest, depth + 1);
         return new SliceResult.ParamFromCaller(callerSlice);
+    }
+
+    private SliceResult handleBinary(BinaryExpr be, MethodDeclaration method,
+                                      List<MethodDeclaration> callChain, int depth) {
+        SliceResult left = slice(be.getLeft(), method, callChain, depth + 1);
+        SliceResult right = slice(be.getRight(), method, callChain, depth + 1);
+        BinaryExpr.Operator op = be.getOperator();
+
+        if (left instanceof SliceResult.Resolved lv && right instanceof SliceResult.Resolved rv) {
+            Object computed = compute(lv.value(), op, rv.value());
+            if (computed != null) return new SliceResult.Resolved(computed);
+        }
+        // Mixed or non-computable: emit Derived(CONCATENATION) so the renderer can show partial info.
+        SliceResult.DerivedKind kind = op == BinaryExpr.Operator.PLUS
+                ? SliceResult.DerivedKind.CONCATENATION
+                : SliceResult.DerivedKind.BINARY_OP;
+        return new SliceResult.Derived(kind, java.util.List.of(left, right));
+    }
+
+    private static Object compute(Object l, BinaryExpr.Operator op, Object r) {
+        // String concatenation: "+" with at least one String operand.
+        if (op == BinaryExpr.Operator.PLUS && (l instanceof String || r instanceof String)) {
+            return String.valueOf(l) + String.valueOf(r);
+        }
+        if (l instanceof Number ln && r instanceof Number rn) {
+            long lv = ln.longValue();
+            long rv = rn.longValue();
+            return switch (op) {
+                case PLUS -> lv + rv;
+                case MINUS -> lv - rv;
+                case MULTIPLY -> lv * rv;
+                case DIVIDE -> rv != 0 ? lv / rv : null;
+                case REMAINDER -> rv != 0 ? lv % rv : null;
+                default -> null;
+            };
+        }
+        return null;
     }
 }
