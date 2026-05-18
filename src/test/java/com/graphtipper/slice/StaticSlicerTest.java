@@ -60,4 +60,28 @@ class StaticSlicerTest {
         assertThat(slice.argType()).isEqualTo("int");
         assertThat(slice.result()).isInstanceOf(SliceResult.Resolved.class);
     }
+
+    @Test
+    void clusterSlice_carries_per_arg_common_prefixes() {
+        var args = java.util.List.of(
+                new ArgSlice(0, "row", "int", new SliceResult.Resolved("rowCount()-1")),
+                new ArgSlice(1, "col", "int", new SliceResult.LoopVar("col", "0..N-1")),
+                new ArgSlice(2, "value", "Text",
+                        new SliceResult.Unresolved(UnresolvedReason.FIELD_READ, "commandSpec")));
+        var cs = new ClusterSlice(args);
+        assertThat(cs.args()).hasSize(3);
+        assertThat(cs.args().get(0).argName()).isEqualTo("row");
+    }
+
+    @Test
+    void sliceMemoCache_caches_and_retrieves() {
+        var cache = new SliceMemoCache();
+        var key = "M.foo:x:chain123";
+        var result = new SliceResult.Resolved("hello");
+        assertThat(cache.get(key)).isNull();
+        cache.put(key, result);
+        assertThat(cache.get(key)).isEqualTo(result);
+        cache.clear();
+        assertThat(cache.get(key)).isNull();
+    }
 }
