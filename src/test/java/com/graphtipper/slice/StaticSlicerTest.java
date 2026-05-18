@@ -84,4 +84,31 @@ class StaticSlicerTest {
         cache.clear();
         assertThat(cache.get(key)).isNull();
     }
+
+    @Test
+    void slices_string_literal_to_resolved() {
+        var expr = com.github.javaparser.StaticJavaParser.parseExpression("\"hello\"");
+        var slicer = new StaticSlicer();
+        var result = slicer.slice(expr, /*method*/ null, java.util.List.of(), 0);
+        assertThat(result).isInstanceOfSatisfying(SliceResult.Resolved.class, r ->
+                assertThat(r.value()).isEqualTo("hello"));
+    }
+
+    @Test
+    void slices_integer_literal_to_resolved() {
+        var expr = com.github.javaparser.StaticJavaParser.parseExpression("42");
+        var slicer = new StaticSlicer();
+        var result = slicer.slice(expr, null, java.util.List.of(), 0);
+        assertThat(result).isInstanceOfSatisfying(SliceResult.Resolved.class, r ->
+                assertThat(r.value()).isEqualTo(42));
+    }
+
+    @Test
+    void slices_null_literal_to_resolved_null() {
+        var expr = com.github.javaparser.StaticJavaParser.parseExpression("null");
+        var slicer = new StaticSlicer();
+        var result = slicer.slice(expr, null, java.util.List.of(), 0);
+        assertThat(result).isInstanceOfSatisfying(SliceResult.Resolved.class, r ->
+                assertThat(r.value()).isNull());
+    }
 }
