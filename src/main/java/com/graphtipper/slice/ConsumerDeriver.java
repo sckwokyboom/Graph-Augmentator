@@ -37,7 +37,7 @@ public final class ConsumerDeriver {
 
     /** Walk the consumer's method body, classify how target's return value is used. */
     public ReturnValueUsage classifyReturnValueUsage(Path file, String consumerFqn, String targetSimpleName) {
-        Optional<MethodDeclaration> mdOpt = findMethod(file, consumerFqn);
+        Optional<MethodDeclaration> mdOpt = findMethod(file, consumerFqn, targetSimpleName);
         if (mdOpt.isEmpty()) return ReturnValueUsage.empty();
         MethodDeclaration md = mdOpt.get();
 
@@ -148,7 +148,7 @@ public final class ConsumerDeriver {
     /** Walk the consumer's method body, classify exception handling around the target call(s). */
     public ExceptionHandlingNearCall classifyExceptionHandling(
             java.nio.file.Path file, String consumerFqn, String targetSimpleName) {
-        Optional<MethodDeclaration> mdOpt = findMethod(file, consumerFqn);
+        Optional<MethodDeclaration> mdOpt = findMethod(file, consumerFqn, targetSimpleName);
         if (mdOpt.isEmpty()) return ExceptionHandlingNearCall.none();
         MethodDeclaration md = mdOpt.get();
         List<String> caught = new ArrayList<>();
@@ -189,7 +189,19 @@ public final class ConsumerDeriver {
         return dot < 0 ? t : t.substring(dot + 1);
     }
 
-    private Optional<MethodDeclaration> findMethod(Path file, String fqn) {
+    /**
+     * Resolves a consumer method by FQN, optionally disambiguating overloads by which
+     * one actually contains a call to {@code targetSimpleName}. The CPG only gives us
+     * {@code class.method} (no parameter types) for the immediate consumer, so when the
+     * source has two methods named e.g. {@code addRowValues} — one delegating, one really
+     * calling the target — picking by FQN alone is ambiguous.
+     *
+     * <p>If {@code targetSimpleName} is non-null, prefers the overload that contains a
+     * direct {@link MethodCallExpr} to {@code targetSimpleName}. Falls back to any matching
+     * overload if none contain the target call (preserves locateLine behavior for tests
+     * that don't actually call target).
+     */
+    private Optional<MethodDeclaration> findMethod(Path file, String fqn, String targetSimpleName) {
         try {
             CompilationUnit cu = StaticJavaParser.parse(file.toFile());
             int lastDot = fqn.lastIndexOf('.');
@@ -198,14 +210,26 @@ public final class ConsumerDeriver {
             String enclosingFqn = fqn.substring(0, lastDot);
             String simpleClass = enclosingFqn.substring(
                     Math.max(enclosingFqn.lastIndexOf('.'), enclosingFqn.lastIndexOf('$')) + 1);
-            return cu.findAll(MethodDeclaration.class).stream()
+            List<MethodDeclaration> candidates = cu.findAll(MethodDeclaration.class).stream()
                     .filter(m -> m.getNameAsString().equals(methodName))
                     .filter(m -> m.findAncestor(TypeDeclaration.class)
                             .map(t -> t.getNameAsString().equals(simpleClass)).orElse(false))
-                    .findFirst();
+                    .toList();
+            if (candidates.isEmpty()) return Optional.empty();
+            if (targetSimpleName == null) return Optional.of(candidates.get(0));
+            return candidates.stream()
+                    .filter(m -> containsCallTo(m, targetSimpleName))
+                    .findFirst()
+                    .or(() -> Optional.of(candidates.get(0)));
         } catch (Exception e) {
             return Optional.empty();
         }
+    }
+
+    /** True if the given method body has any direct call to {@code targetSimpleName}. */
+    private static boolean containsCallTo(MethodDeclaration md, String targetSimpleName) {
+        return md.findAll(MethodCallExpr.class).stream()
+                .anyMatch(c -> c.getNameAsString().equals(targetSimpleName));
     }
 
     /**
@@ -235,7 +259,7 @@ public final class ConsumerDeriver {
                 usage = classifyReturnValueUsage(file, consumerFqn, targetSimpleName);
                 exHandling = classifyExceptionHandling(file, consumerFqn, targetSimpleName);
                 fileStr = file.toString();
-                line = locateLine(file, consumerFqn);
+                line = locateLine(file, consumerFqn, targetSimpleName);
             }
             var implications = ImpliedRequirementTemplates.derive(usage, exHandling);
             out.add(new ConsumerContract(consumerFqn, fileStr, line, bodySlice, usage, exHandling,
@@ -247,8 +271,8 @@ public final class ConsumerDeriver {
 
     private static String nullSafe(String s) { return s == null ? "(unavailable)" : s; }
 
-    private int locateLine(java.nio.file.Path file, String fqn) {
-        var mdOpt = findMethod(file, fqn);
+    private int locateLine(java.nio.file.Path file, String fqn, String targetSimpleName) {
+        var mdOpt = findMethod(file, fqn, targetSimpleName);
         if (mdOpt.isEmpty()) return -1;
         return mdOpt.get().getBegin().map(p -> p.line).orElse(-1);
     }

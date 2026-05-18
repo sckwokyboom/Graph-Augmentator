@@ -229,4 +229,49 @@ class ConsumerDeriverTest {
         var node = new com.graphtipper.model.Node.Method("m_" + testFqn, testFqn, "", List.of(), "", "Test.java", 1, 10, "", true, false, List.of());
         return new ClusterMember(node, List.of(), new Oracle.None());
     }
+
+    @Test
+    void classifyReturnValueUsage_picks_overload_that_actually_calls_target() {
+        // OverloadedConsumer has TWO methods named `addRowValues`: the first delegates
+        // (no call to target), the second is the real immediate consumer (assigns target's
+        // return to `cell` and reads `cell.row`). Without overload disambiguation by
+        // target-call presence, the first overload would be picked and usage extraction
+        // would return empty (the original picocli/putValue bug).
+        var d = new ConsumerDeriver(new AstSnippetExtractor());
+        var usage = d.classifyReturnValueUsage(
+            consumerFixture("OverloadedConsumer.java"),
+            "consumerfix.OverloadedConsumer.addRowValues",
+            "target");
+        assertThat(usage.kinds())
+            .as("must reach the overload that actually calls target, not the delegating one")
+            .contains(UsageKind.ASSIGNED_TO_LOCAL, UsageKind.FIELD_READ, UsageKind.USED_IN_CONDITION);
+        assertThat(usage.fieldsRead()).contains("row");
+    }
+
+    @Test
+    void classifyExceptionHandling_picks_overload_that_actually_calls_target() {
+        var d = new ConsumerDeriver(new AstSnippetExtractor());
+        var ex = d.classifyExceptionHandling(
+            consumerFixture("OverloadedConsumer.java"),
+            "consumerfix.OverloadedConsumer.addRowValues",
+            "target");
+        // The right overload has no try/catch around target.
+        assertThat(ex.inTryCatch()).isFalse();
+    }
+
+    @Test
+    void sliceConsumerBody_picks_overload_that_actually_calls_target() {
+        var extractor = new AstSnippetExtractor();
+        String slice = extractor.sliceConsumerBody(
+            consumerFixture("OverloadedConsumer.java"),
+            "consumerfix.OverloadedConsumer.addRowValues",
+            "target");
+        // The right overload contains `target(rowSeed, col, ...)` and the cell branch.
+        assertThat(slice)
+            .as("slice must come from the overload that actually contains target(...)")
+            .contains("target(rowSeed, col,")
+            .contains("cell.row");
+        // And NOT the delegating one (which contains only `addRowValues(values, 0)`)
+        assertThat(slice).doesNotContain("addRowValues(values, 0)");
+    }
 }

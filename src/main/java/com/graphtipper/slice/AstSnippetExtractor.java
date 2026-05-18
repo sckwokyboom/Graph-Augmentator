@@ -545,7 +545,7 @@ public final class AstSnippetExtractor {
         if (entry == null || !entry.parseOk) return null;
         CompilationUnit cu = entry.cu;
 
-        Optional<MethodDeclaration> methodOpt = findMethodByFqn(cu, methodFqn);
+        Optional<MethodDeclaration> methodOpt = findMethodByFqn(cu, methodFqn, targetSimpleName);
         if (methodOpt.isEmpty()) return null;
         MethodDeclaration md = methodOpt.get();
         if (md.getBody().isEmpty()) return null;
@@ -655,16 +655,36 @@ public final class AstSnippetExtractor {
      * The FQN format is "package.ClassName.methodName" or "package.OuterClass.InnerClass.methodName".
      */
     private Optional<MethodDeclaration> findMethodByFqn(CompilationUnit cu, String fqn) {
+        return findMethodByFqn(cu, fqn, /*targetSimpleName*/ null);
+    }
+
+    /**
+     * Like {@link #findMethodByFqn(CompilationUnit, String)} but, when
+     * {@code targetSimpleName} is non-null, prefers the overload that actually contains
+     * a direct call to {@code targetSimpleName}. Falls back to any matching overload if
+     * none contain the target call. Necessary for consumer-body slicing where the CPG
+     * gives us {@code class.method} (no parameter types) and multiple overloads may
+     * share that name (e.g. picocli's {@code addRowValues(String...)} vs
+     * {@code addRowValues(Text...)} — only the latter calls {@code putValue}).
+     */
+    private Optional<MethodDeclaration> findMethodByFqn(CompilationUnit cu, String fqn, String targetSimpleName) {
         int lastDot = fqn.lastIndexOf('.');
         if (lastDot < 0) return Optional.empty();
         String methodName = fqn.substring(lastDot + 1);
         String enclosingFqn = fqn.substring(0, lastDot);
         String simpleClass = enclosingFqn.substring(
                 Math.max(enclosingFqn.lastIndexOf('.'), enclosingFqn.lastIndexOf('$')) + 1);
-        return cu.findAll(MethodDeclaration.class).stream()
+        java.util.List<MethodDeclaration> candidates = cu.findAll(MethodDeclaration.class).stream()
                 .filter(m -> m.getNameAsString().equals(methodName))
                 .filter(m -> m.findAncestor(com.github.javaparser.ast.body.TypeDeclaration.class)
                         .map(t -> t.getNameAsString().equals(simpleClass)).orElse(false))
-                .findFirst();
+                .toList();
+        if (candidates.isEmpty()) return Optional.empty();
+        if (targetSimpleName == null) return Optional.of(candidates.get(0));
+        return candidates.stream()
+                .filter(m -> m.findAll(com.github.javaparser.ast.expr.MethodCallExpr.class).stream()
+                        .anyMatch(c -> c.getNameAsString().equals(targetSimpleName)))
+                .findFirst()
+                .or(() -> Optional.of(candidates.get(0)));
     }
 }
