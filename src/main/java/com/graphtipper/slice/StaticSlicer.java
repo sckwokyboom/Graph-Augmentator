@@ -93,6 +93,17 @@ public final class StaticSlicer {
         if (expr instanceof ConditionalExpr ce) {
             return handleConditional(ce, method, callChain, depth);
         }
+        if (expr instanceof EnclosedExpr ee) {
+            return slice(ee.getInner(), method, callChain, depth + 1);
+        }
+        if (expr instanceof CastExpr cae) {
+            return slice(cae.getExpression(), method, callChain, depth + 1);
+        }
+        if (expr instanceof ObjectCreationExpr oce) {
+            List<SliceResult> partResults = new java.util.ArrayList<>();
+            for (var arg : oce.getArguments()) partResults.add(slice(arg, method, callChain, depth + 1));
+            return new SliceResult.Derived(SliceResult.DerivedKind.OBJECT_CREATION, partResults);
+        }
         // Tasks 6–14 expand this switch.
         return new SliceResult.Unresolved(UnresolvedReason.UNSUPPORTED,
                 expr.getClass().getSimpleName());

@@ -267,4 +267,35 @@ class StaticSlicerTest {
             assertThat(bu.branches()).hasSize(2);
         });
     }
+
+    @Test
+    void slices_object_creation_to_derived_constructor() {
+        var expr = com.github.javaparser.StaticJavaParser.parseExpression("new String(\"hello\")");
+        var slicer = new StaticSlicer();
+        var result = slicer.slice(expr, null, java.util.List.of(), 0);
+        assertThat(result).isInstanceOfSatisfying(SliceResult.Derived.class, d -> {
+            assertThat(d.kind()).isEqualTo(SliceResult.DerivedKind.OBJECT_CREATION);
+            assertThat(d.parts()).hasSize(1);
+            assertThat(d.parts().get(0)).isInstanceOfSatisfying(SliceResult.Resolved.class, r ->
+                    assertThat(r.value()).isEqualTo("hello"));
+        });
+    }
+
+    @Test
+    void slices_enclosed_expr_unwraps() {
+        var expr = com.github.javaparser.StaticJavaParser.parseExpression("(\"hi\")");
+        var slicer = new StaticSlicer();
+        var result = slicer.slice(expr, null, java.util.List.of(), 0);
+        assertThat(result).isInstanceOfSatisfying(SliceResult.Resolved.class, r ->
+                assertThat(r.value()).isEqualTo("hi"));
+    }
+
+    @Test
+    void slices_cast_expr_unwraps_inner() {
+        var expr = com.github.javaparser.StaticJavaParser.parseExpression("(String) \"hi\"");
+        var slicer = new StaticSlicer();
+        var result = slicer.slice(expr, null, java.util.List.of(), 0);
+        assertThat(result).isInstanceOfSatisfying(SliceResult.Resolved.class, r ->
+                assertThat(r.value()).isEqualTo("hi"));
+    }
 }
