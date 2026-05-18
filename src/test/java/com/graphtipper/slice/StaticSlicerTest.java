@@ -50,4 +50,14 @@ class StaticSlicerTest {
                 new SliceResult.Resolved("a"), new SliceResult.Resolved("b")));
         assertThat(bu.branches()).hasSize(2);
     }
+
+    @Test
+    void argSlice_carries_position_name_type_and_result() {
+        var slice = new ArgSlice(0, "row", "int",
+                new SliceResult.Resolved("rowCount()-1"));
+        assertThat(slice.argPosition()).isZero();
+        assertThat(slice.argName()).isEqualTo("row");
+        assertThat(slice.argType()).isEqualTo("int");
+        assertThat(slice.result()).isInstanceOf(SliceResult.Resolved.class);
+    }
 }
