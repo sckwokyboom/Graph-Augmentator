@@ -68,6 +68,25 @@ public final class StaticSlicer {
         if (expr instanceof FieldAccessExpr fae) {
             return new SliceResult.Unresolved(UnresolvedReason.FIELD_READ, fae.toString());
         }
+        if (expr instanceof ArrayInitializerExpr aie) {
+            List<SliceResult> partResults = new java.util.ArrayList<>();
+            for (var v : aie.getValues()) partResults.add(slice(v, method, callChain, depth + 1));
+            return new SliceResult.Derived(SliceResult.DerivedKind.ARRAY_LITERAL, partResults);
+        }
+        if (expr instanceof ArrayCreationExpr ace) {
+            // new T[]{a, b, c}
+            if (ace.getInitializer().isPresent()) {
+                return slice(ace.getInitializer().get(), method, callChain, depth + 1);
+            }
+            return new SliceResult.Unresolved(UnresolvedReason.UNSUPPORTED,
+                    "array creation without initializer");
+        }
+        if (expr instanceof ArrayAccessExpr aae) {
+            SliceResult arraySlice = slice(aae.getName(), method, callChain, depth + 1);
+            SliceResult idxSlice = slice(aae.getIndex(), method, callChain, depth + 1);
+            return new SliceResult.Derived(SliceResult.DerivedKind.ARRAY_ACCESS,
+                    java.util.List.of(arraySlice, idxSlice));
+        }
         // Tasks 6–14 expand this switch.
         return new SliceResult.Unresolved(UnresolvedReason.UNSUPPORTED,
                 expr.getClass().getSimpleName());

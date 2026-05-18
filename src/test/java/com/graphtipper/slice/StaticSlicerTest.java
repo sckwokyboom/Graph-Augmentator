@@ -187,4 +187,31 @@ class StaticSlicerTest {
             assertThat(u.detail()).contains("field");
         });
     }
+
+    @Test
+    void slices_array_initializer_to_derived_array_literal() {
+        var expr = com.github.javaparser.StaticJavaParser.parseExpression("new String[]{\"a\", \"b\"}");
+        var slicer = new StaticSlicer();
+        var result = slicer.slice(expr, null, java.util.List.of(), 0);
+        assertThat(result).isInstanceOfSatisfying(SliceResult.Derived.class, d -> {
+            assertThat(d.kind()).isEqualTo(SliceResult.DerivedKind.ARRAY_LITERAL);
+            assertThat(d.parts()).hasSize(2);
+            assertThat(d.parts().get(0)).isInstanceOfSatisfying(SliceResult.Resolved.class, r ->
+                    assertThat(r.value()).isEqualTo("a"));
+        });
+    }
+
+    @Test
+    void slices_array_access_to_derived_array_access() {
+        var method = parseMethod(
+                "void m() { String[] arr = new String[]{\"x\", \"y\"}; foo(arr[0]); } void foo(String s) {}");
+        var fooCall = method.findFirst(com.github.javaparser.ast.expr.MethodCallExpr.class).orElseThrow();
+        var indexExpr = fooCall.getArgument(0);
+        var slicer = new StaticSlicer();
+        var result = slicer.slice(indexExpr, method, java.util.List.of(), 0);
+        assertThat(result).isInstanceOfSatisfying(SliceResult.Derived.class, d -> {
+            assertThat(d.kind()).isEqualTo(SliceResult.DerivedKind.ARRAY_ACCESS);
+            assertThat(d.parts()).hasSize(2);
+        });
+    }
 }
