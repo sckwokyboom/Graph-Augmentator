@@ -245,4 +245,26 @@ class StaticSlicerTest {
         assertThat(result).isInstanceOfSatisfying(SliceResult.Derived.class, d ->
                 assertThat(d.kind()).isEqualTo(SliceResult.DerivedKind.CONCATENATION));
     }
+
+    @Test
+    void slices_conditional_with_resolved_cond_takes_branch() {
+        var expr = com.github.javaparser.StaticJavaParser.parseExpression("true ? \"yes\" : \"no\"");
+        var slicer = new StaticSlicer();
+        var result = slicer.slice(expr, null, java.util.List.of(), 0);
+        assertThat(result).isInstanceOfSatisfying(SliceResult.Resolved.class, r ->
+                assertThat(r.value()).isEqualTo("yes"));
+    }
+
+    @Test
+    void slices_conditional_with_unresolvable_cond_to_branch_union() {
+        var method = parseMethod(
+                "void m() { foo(this.f ? \"a\" : \"b\"); } void foo(String s) {}");
+        var fooCall = method.findFirst(com.github.javaparser.ast.expr.MethodCallExpr.class).orElseThrow();
+        var ternary = fooCall.getArgument(0);
+        var slicer = new StaticSlicer();
+        var result = slicer.slice(ternary, method, java.util.List.of(), 0);
+        assertThat(result).isInstanceOfSatisfying(SliceResult.BranchUnion.class, bu -> {
+            assertThat(bu.branches()).hasSize(2);
+        });
+    }
 }

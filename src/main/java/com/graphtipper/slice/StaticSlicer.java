@@ -90,6 +90,9 @@ public final class StaticSlicer {
         if (expr instanceof BinaryExpr be) {
             return handleBinary(be, method, callChain, depth);
         }
+        if (expr instanceof ConditionalExpr ce) {
+            return handleConditional(ce, method, callChain, depth);
+        }
         // Tasks 6–14 expand this switch.
         return new SliceResult.Unresolved(UnresolvedReason.UNSUPPORTED,
                 expr.getClass().getSimpleName());
@@ -194,5 +197,29 @@ public final class StaticSlicer {
             };
         }
         return null;
+    }
+
+    private SliceResult handleConditional(ConditionalExpr ce, MethodDeclaration method,
+                                           List<MethodDeclaration> callChain, int depth) {
+        SliceResult cond = slice(ce.getCondition(), method, callChain, depth + 1);
+        if (cond instanceof SliceResult.Resolved r && r.value() instanceof Boolean b) {
+            Expression chosen = b ? ce.getThenExpr() : ce.getElseExpr();
+            return slice(chosen, method, callChain, depth + 1);
+        }
+        SliceResult thenS = slice(ce.getThenExpr(), method, callChain, depth + 1);
+        SliceResult elseS = slice(ce.getElseExpr(), method, callChain, depth + 1);
+        List<SliceResult> branches = new java.util.ArrayList<>();
+        addBranches(thenS, branches);
+        addBranches(elseS, branches);
+        if (branches.size() > maxBranches) {
+            return new SliceResult.Unresolved(UnresolvedReason.BRANCH_EXPLOSION,
+                    branches.size() + " branches");
+        }
+        return new SliceResult.BranchUnion(branches);
+    }
+
+    private static void addBranches(SliceResult r, List<SliceResult> acc) {
+        if (r instanceof SliceResult.BranchUnion bu) acc.addAll(bu.branches());
+        else acc.add(r);
     }
 }
