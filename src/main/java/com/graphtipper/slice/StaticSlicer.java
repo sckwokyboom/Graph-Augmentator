@@ -18,6 +18,14 @@ public final class StaticSlicer {
     public static final int DEFAULT_MAX_DEPTH = 15;
     public static final int DEFAULT_MAX_BRANCHES = 3;
 
+    private static final java.util.Set<String> TRANSPARENT_WRAPPERS = java.util.Set.of(
+            "String.valueOf",
+            "Integer.parseInt",
+            "Long.parseLong",
+            "Double.parseDouble",
+            "Boolean.parseBoolean"
+    );
+
     private final int maxDepth;
     private final int maxBranches;
     private final SliceMemoCache cache = new SliceMemoCache();
@@ -103,6 +111,9 @@ public final class StaticSlicer {
             List<SliceResult> partResults = new java.util.ArrayList<>();
             for (var arg : oce.getArguments()) partResults.add(slice(arg, method, callChain, depth + 1));
             return new SliceResult.Derived(SliceResult.DerivedKind.OBJECT_CREATION, partResults);
+        }
+        if (expr instanceof MethodCallExpr mce) {
+            return handleMethodCall(mce, method, callChain, depth);
         }
         // Tasks 6–14 expand this switch.
         return new SliceResult.Unresolved(UnresolvedReason.UNSUPPORTED,
@@ -232,5 +243,24 @@ public final class StaticSlicer {
     private static void addBranches(SliceResult r, List<SliceResult> acc) {
         if (r instanceof SliceResult.BranchUnion bu) acc.addAll(bu.branches());
         else acc.add(r);
+    }
+
+    private SliceResult handleMethodCall(MethodCallExpr mce, MethodDeclaration method,
+                                           List<MethodDeclaration> callChain, int depth) {
+        String qual = mce.getScope().map(Object::toString).orElse("");
+        String name = mce.getNameAsString();
+        String full = qual.isEmpty() ? name : qual + "." + name;
+
+        if (TRANSPARENT_WRAPPERS.contains(full) && mce.getArguments().size() == 1) {
+            return slice(mce.getArgument(0), method, callChain, depth + 1);
+        }
+
+        // Reflection sentinels.
+        if (full.endsWith(".invoke") || full.endsWith(".forName")
+                || full.equals("Field.get") || full.equals("Field.set")) {
+            return new SliceResult.Unresolved(UnresolvedReason.REFLECTION, full);
+        }
+
+        return new SliceResult.Unresolved(UnresolvedReason.METHOD_CALL, full + "(...)");
     }
 }

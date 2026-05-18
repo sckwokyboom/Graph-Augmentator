@@ -298,4 +298,36 @@ class StaticSlicerTest {
         assertThat(result).isInstanceOfSatisfying(SliceResult.Resolved.class, r ->
                 assertThat(r.value()).isEqualTo("hi"));
     }
+
+    @Test
+    void slices_String_valueOf_as_transparent_wrapper() {
+        var expr = com.github.javaparser.StaticJavaParser.parseExpression("String.valueOf(\"hello\")");
+        var slicer = new StaticSlicer();
+        var result = slicer.slice(expr, null, java.util.List.of(), 0);
+        assertThat(result).isInstanceOfSatisfying(SliceResult.Resolved.class, r ->
+                assertThat(r.value()).isEqualTo("hello"));
+    }
+
+    @Test
+    void slices_Integer_parseInt_as_transparent_wrapper() {
+        var expr = com.github.javaparser.StaticJavaParser.parseExpression("Integer.parseInt(\"42\")");
+        var slicer = new StaticSlicer();
+        var result = slicer.slice(expr, null, java.util.List.of(), 0);
+        assertThat(result).isInstanceOfSatisfying(SliceResult.Resolved.class, r ->
+                // Wrapper is transparent — we return the inner-resolved value, type coercion deferred.
+                assertThat(r.value()).isEqualTo("42"));
+    }
+
+    @Test
+    void slices_arbitrary_method_call_to_unresolved_method_call() {
+        var method = parseMethod(
+                "void m() { foo(bar()); } String bar() { return \"x\"; } void foo(String s) {}");
+        var fooCall = method.findAll(com.github.javaparser.ast.expr.MethodCallExpr.class).stream()
+                .filter(c -> c.getNameAsString().equals("foo")).findFirst().orElseThrow();
+        var barCall = fooCall.getArgument(0);
+        var slicer = new StaticSlicer();
+        var result = slicer.slice(barCall, method, java.util.List.of(), 0);
+        assertThat(result).isInstanceOfSatisfying(SliceResult.Unresolved.class, u ->
+                assertThat(u.reason()).isEqualTo(UnresolvedReason.METHOD_CALL));
+    }
 }
