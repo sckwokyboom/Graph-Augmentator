@@ -98,13 +98,39 @@ public final class StaticSlicer {
         if (lastRhs != null) return slice(lastRhs, method, callChain, depth + 1);
 
         // Not found as local; check if it's a method parameter (Task 7 handles step-up).
-        for (var p : method.getParameters()) {
-            if (p.getNameAsString().equals(varName)) {
-                return new SliceResult.Unresolved(UnresolvedReason.NOT_FOUND,
-                        "parameter " + varName + " step-up not yet wired");
-                // Will be replaced in Task 7.
+        for (int i = 0; i < method.getParameters().size(); i++) {
+            if (method.getParameter(i).getNameAsString().equals(varName)) {
+                return stepUpToCaller(i, method, callChain, depth);
             }
         }
         return new SliceResult.Unresolved(UnresolvedReason.NOT_FOUND, varName);
+    }
+
+    private SliceResult stepUpToCaller(int paramIdx, MethodDeclaration calleeMethod,
+                                        List<MethodDeclaration> callChain, int depth) {
+        if (callChain.isEmpty()) {
+            return new SliceResult.Unresolved(UnresolvedReason.ENTRY_POINT_REACHED,
+                    "param " + calleeMethod.getParameter(paramIdx).getNameAsString());
+        }
+        MethodDeclaration caller = callChain.get(callChain.size() - 1);
+        List<MethodDeclaration> rest = callChain.subList(0, callChain.size() - 1);
+
+        // Locate the call expression in caller.body that calls calleeMethod.
+        String calleeName = calleeMethod.getNameAsString();
+        var callOpt = caller.findAll(com.github.javaparser.ast.expr.MethodCallExpr.class).stream()
+                .filter(c -> c.getNameAsString().equals(calleeName))
+                .findFirst();
+        if (callOpt.isEmpty()) {
+            return new SliceResult.Unresolved(UnresolvedReason.NOT_FOUND,
+                    "no call to " + calleeName + " in " + caller.getNameAsString());
+        }
+        var call = callOpt.get();
+        if (paramIdx >= call.getArguments().size()) {
+            return new SliceResult.Unresolved(UnresolvedReason.NOT_FOUND,
+                    "param index " + paramIdx + " out of range at call site");
+        }
+        Expression actualArg = call.getArgument(paramIdx);
+        SliceResult callerSlice = slice(actualArg, caller, rest, depth + 1);
+        return new SliceResult.ParamFromCaller(callerSlice);
     }
 }

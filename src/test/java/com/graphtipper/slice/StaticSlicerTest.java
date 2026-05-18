@@ -141,4 +141,39 @@ class StaticSlicerTest {
         // After Task 10, this becomes Resolved("ab"). Make this lenient until then.
         assertThat(result).isNotNull();
     }
+
+    @Test
+    void slices_param_steps_up_to_caller_actual_arg() {
+        var cu = com.github.javaparser.StaticJavaParser.parse(
+                "class C { " +
+                "  void caller() { callee(\"hello\"); } " +
+                "  void callee(String s) { target(s); } " +
+                "  void target(String t) {} " +
+                "}");
+        var caller = cu.findAll(com.github.javaparser.ast.body.MethodDeclaration.class).stream()
+                .filter(m -> m.getNameAsString().equals("caller")).findFirst().orElseThrow();
+        var callee = cu.findAll(com.github.javaparser.ast.body.MethodDeclaration.class).stream()
+                .filter(m -> m.getNameAsString().equals("callee")).findFirst().orElseThrow();
+        var targetCall = callee.findAll(com.github.javaparser.ast.expr.MethodCallExpr.class).stream()
+                .filter(c -> c.getNameAsString().equals("target")).findFirst().orElseThrow();
+        var sRef = targetCall.getArgument(0);
+
+        var slicer = new StaticSlicer();
+        var result = slicer.slice(sRef, callee, java.util.List.of(caller), 0);
+        // The result should walk: NameExpr 's' → param of callee → actualArg "hello" in caller
+        assertThat(result).isInstanceOfSatisfying(SliceResult.ParamFromCaller.class, pf ->
+                assertThat(pf.callerSlice()).isInstanceOfSatisfying(SliceResult.Resolved.class, r ->
+                        assertThat(r.value()).isEqualTo("hello")));
+    }
+
+    @Test
+    void slices_param_returns_entry_point_when_callChain_empty() {
+        var method = parseMethod("void m(String s) { foo(s); } void foo(String x) {}");
+        var fooCall = method.findFirst(com.github.javaparser.ast.expr.MethodCallExpr.class).orElseThrow();
+        var sRef = fooCall.getArgument(0);
+        var slicer = new StaticSlicer();
+        var result = slicer.slice(sRef, method, java.util.List.of(), 0);
+        assertThat(result).isInstanceOfSatisfying(SliceResult.Unresolved.class, u ->
+                assertThat(u.reason()).isEqualTo(UnresolvedReason.ENTRY_POINT_REACHED));
+    }
 }
