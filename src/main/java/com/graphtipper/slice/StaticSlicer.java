@@ -65,6 +65,9 @@ public final class StaticSlicer {
         if (expr instanceof NameExpr name && method != null) {
             return intraProcBackwardSlice(name, method, callChain, depth);
         }
+        if (expr instanceof FieldAccessExpr fae) {
+            return new SliceResult.Unresolved(UnresolvedReason.FIELD_READ, fae.toString());
+        }
         // Tasks 6–14 expand this switch.
         return new SliceResult.Unresolved(UnresolvedReason.UNSUPPORTED,
                 expr.getClass().getSimpleName());

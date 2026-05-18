@@ -176,4 +176,15 @@ class StaticSlicerTest {
         assertThat(result).isInstanceOfSatisfying(SliceResult.Unresolved.class, u ->
                 assertThat(u.reason()).isEqualTo(UnresolvedReason.ENTRY_POINT_REACHED));
     }
+
+    @Test
+    void slices_field_access_to_unresolved_field_read() {
+        var expr = com.github.javaparser.StaticJavaParser.parseExpression("this.field");
+        var slicer = new StaticSlicer();
+        var result = slicer.slice(expr, null, java.util.List.of(), 0);
+        assertThat(result).isInstanceOfSatisfying(SliceResult.Unresolved.class, u -> {
+            assertThat(u.reason()).isEqualTo(UnresolvedReason.FIELD_READ);
+            assertThat(u.detail()).contains("field");
+        });
+    }
 }
