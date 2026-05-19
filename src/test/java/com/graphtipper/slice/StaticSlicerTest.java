@@ -330,4 +330,19 @@ class StaticSlicerTest {
         assertThat(result).isInstanceOfSatisfying(SliceResult.Unresolved.class, u ->
                 assertThat(u.reason()).isEqualTo(UnresolvedReason.METHOD_CALL));
     }
+
+    @Test
+    void slices_loop_variable_to_LoopVar() {
+        var method = parseMethod(
+                "void m(int n) { for (int i = 0; i < n; i++) { foo(i); } } void foo(int x) {}");
+        var fooCall = method.findFirst(com.github.javaparser.ast.expr.MethodCallExpr.class).orElseThrow();
+        var iRef = fooCall.getArgument(0);
+        var slicer = new StaticSlicer();
+        var result = slicer.slice(iRef, method, java.util.List.of(), 0);
+        assertThat(result).isInstanceOfSatisfying(SliceResult.LoopVar.class, lv -> {
+            assertThat(lv.name()).isEqualTo("i");
+            assertThat(lv.range()).contains("0");
+            assertThat(lv.range()).contains("n");
+        });
+    }
 }

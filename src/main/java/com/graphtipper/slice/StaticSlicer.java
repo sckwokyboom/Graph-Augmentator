@@ -130,6 +130,25 @@ public final class StaticSlicer {
 
         var refPos = nameRef.getBegin().orElseThrow();
 
+        // If nameRef sits inside a for-stmt that declares varName in its init, treat as LoopVar.
+        // Done before the local-var walk because the for-init's VariableDeclarator would otherwise
+        // be picked up as a normal assignment and resolved to the init value.
+        for (var fs : body.findAll(com.github.javaparser.ast.stmt.ForStmt.class)) {
+            boolean fsContainsRef = fs.getRange()
+                    .flatMap(fr -> nameRef.getRange().map(fr::contains))
+                    .orElse(false);
+            if (!fsContainsRef) continue;
+            for (var initExpr : fs.getInitialization()) {
+                if (initExpr instanceof com.github.javaparser.ast.expr.VariableDeclarationExpr vde) {
+                    for (var v : vde.getVariables()) {
+                        if (v.getNameAsString().equals(varName)) {
+                            return new SliceResult.LoopVar(varName, describeForLoopRange(fs, varName));
+                        }
+                    }
+                }
+            }
+        }
+
         // Walk all VariableDeclarator nodes and AssignExpr nodes that occur before refPos.
         Expression lastRhs = null;
         for (var vd : body.findAll(com.github.javaparser.ast.body.VariableDeclarator.class)) {
@@ -154,6 +173,22 @@ public final class StaticSlicer {
             }
         }
         return new SliceResult.Unresolved(UnresolvedReason.NOT_FOUND, varName);
+    }
+
+    private static String describeForLoopRange(com.github.javaparser.ast.stmt.ForStmt fs, String varName) {
+        String init = "?";
+        String bound = "?";
+        for (var initExpr : fs.getInitialization()) {
+            if (initExpr instanceof com.github.javaparser.ast.expr.VariableDeclarationExpr vde) {
+                for (var v : vde.getVariables()) {
+                    if (v.getNameAsString().equals(varName) && v.getInitializer().isPresent()) {
+                        init = v.getInitializer().get().toString();
+                    }
+                }
+            }
+        }
+        if (fs.getCompare().isPresent()) bound = fs.getCompare().get().toString();
+        return init + " < ... " + bound;
     }
 
     private SliceResult stepUpToCaller(int paramIdx, MethodDeclaration calleeMethod,
