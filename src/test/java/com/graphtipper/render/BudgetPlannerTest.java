@@ -10,6 +10,42 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 class BudgetPlannerTest {
     @Test
+    void eviction_drops_structural_slice_before_dropping_consumers() {
+        var artifact = buildTwoClusterArtifact();
+        var existingClusters = artifact.consumers().get(0).clusters();
+        var first = existingClusters.get(0);
+        var withSlice = first.withClusterSlice(
+                new ClusterSlice(java.util.List.of(
+                        new ArgSlice(0, "row", "int",
+                                new SliceResult.Resolved(
+                                        "very long value " + "x".repeat(500))))));
+        var consumerWithSlice = new ConsumerContract(
+                artifact.consumers().get(0).consumerFqn(),
+                artifact.consumers().get(0).file(),
+                artifact.consumers().get(0).line(),
+                artifact.consumers().get(0).bodySlice(),
+                artifact.consumers().get(0).returnValueUsage(),
+                artifact.consumers().get(0).exceptionHandling(),
+                artifact.consumers().get(0).implications(),
+                java.util.List.of(withSlice, existingClusters.get(1)),
+                artifact.consumers().get(0).chainsCovered());
+        var artifactWithSlice = new Artifact(
+                artifact.target(), artifact.currentBody(), artifact.chains(),
+                artifact.directTests(), java.util.List.of(consumerWithSlice),
+                artifact.longTailSingletons(), artifact.truncated(), artifact.localContext());
+
+        int fullSize = renderedTokens(artifactWithSlice);
+        int budget = fullSize - 100;
+        var planned = new BudgetPlanner().fit(artifactWithSlice, new TokenBudget(budget));
+
+        var firstCluster = planned.consumers().get(0).clusters().get(0);
+        assertThat(firstCluster.clusterSlice().args())
+                .as("structural slice content should be evicted by tier 3a")
+                .isEmpty();
+        assertThat(planned.consumers()).hasSize(1);
+    }
+
+    @Test
     void protectsMinimumWhenBudgetTight() {
         var g = Gb.graph().method("p.C.target").done().buildRaw();
         var target = (Node.Method) g.byFqn("p.C.target").get(0);
