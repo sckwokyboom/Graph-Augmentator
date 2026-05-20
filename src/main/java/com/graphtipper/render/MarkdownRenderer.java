@@ -152,6 +152,8 @@ public final class MarkdownRenderer {
         sb.append("**Path:** ").append(renderPathSignature(cluster.signature())).append("\n");
         sb.append("**Depth:** ").append(cluster.depth()).append("\n\n");
 
+        renderStaticSlice(sb, cluster);
+
         if (cluster.members().isEmpty()) {
             sb.append("_(no member tests resolved)_\n\n");
             return;
@@ -184,13 +186,16 @@ public final class MarkdownRenderer {
         // Differential matrix — up to 5 rows.
         sb.append("**Differential matrix (").append(Math.min(cluster.members().size(), 5))
           .append(" representatives of ").append(cluster.members().size()).append("):**\n\n");
-        sb.append("| Test | Args at target | Oracle |\n");
+        sb.append("| Test | Sliced args | Oracle |\n");
         sb.append("|---|---|---|\n");
         int rows = Math.min(cluster.members().size(), 5);
         for (int i = 0; i < rows; i++) {
             var m = cluster.members().get(i);
+            String slicedArgs = m.argSlices().isEmpty()
+                    ? argRenderer.renderTuple(m.argsAtTarget())   // fallback to legacy
+                    : renderSlicedArgsTuple(m.argSlices(), argRenderer);
             sb.append("| `").append(m.testMethod().fqn()).append("` | ")
-              .append(escapePipes(argRenderer.renderTuple(m.argsAtTarget()))).append(" | ")
+              .append(escapePipes(slicedArgs)).append(" | ")
               .append(escapePipes(renderOracle(m.oracle()))).append(" |\n");
         }
         if (cluster.members().size() > 5) {
@@ -209,6 +214,48 @@ public final class MarkdownRenderer {
                 sb.append("\n");
             }
             sb.append("\n");
+        }
+    }
+
+    private static String renderSlicedArgsTuple(
+            java.util.List<com.graphtipper.slice.ArgSlice> argSlices, ArgRenderer renderer) {
+        var parts = new java.util.ArrayList<String>();
+        for (var as : argSlices) parts.add(renderer.renderSliceResult(as.result()));
+        return "(" + String.join(", ", parts) + ")";
+    }
+
+    private void renderStaticSlice(StringBuilder sb, com.graphtipper.slice.PathCluster cluster) {
+        var cs = cluster.clusterSlice();
+        if (cs == null || cs.args().isEmpty()) return;
+        sb.append("**Static slice (Tier 2):**\n\n");
+
+        // Collapse policy: if all args are Unresolved with the same reason → one-line summary.
+        com.graphtipper.slice.UnresolvedReason commonReason = null;
+        boolean allUnresolvedSameReason = !cs.args().isEmpty();
+        for (var as : cs.args()) {
+            if (!(as.result() instanceof com.graphtipper.slice.SliceResult.Unresolved u)) {
+                allUnresolvedSameReason = false; break;
+            }
+            if (commonReason == null) commonReason = u.reason();
+            else if (commonReason != u.reason()) { allUnresolvedSameReason = false; break; }
+        }
+        if (allUnresolvedSameReason) {
+            sb.append("all args unresolved (").append(commonReason)
+              .append("); inspect direct tests / test method literals to understand actual values.\n\n");
+            return;
+        }
+
+        // Full per-arg form.
+        var argRenderer = new ArgRenderer();
+        for (var argSlice : cs.args()) {
+            sb.append(argSlice.argName());
+            if (argSlice.argType() != null && !argSlice.argType().isBlank()
+                    && !"?".equals(argSlice.argType())) {
+                sb.append(" (").append(argSlice.argType()).append(")");
+            }
+            sb.append(":\n  ← ");
+            sb.append(argRenderer.renderSliceResult(argSlice.result()));
+            sb.append("\n\n");
         }
     }
 

@@ -223,4 +223,113 @@ class MarkdownRendererTest {
         assertThat(md).contains("Consumers: 0 · Path clusters: 0 (covering 0/0 chains, 0%)");
         assertThat(md).contains("Direct tests: 0 · Long-tail singletons: 0");
     }
+
+    @Test
+    void matrix_uses_sliced_args_column_when_members_have_argSlices() {
+        var target = new com.graphtipper.model.Node.Method(
+                "m_t", "T.target", "", java.util.List.of(), "", "T.java", 1, 5,
+                "", false, false, java.util.List.of());
+        var testM = new com.graphtipper.model.Node.Method(
+                "m_test", "Test.foo", "", java.util.List.of(), "", "Test.java", 1, 1,
+                "", true, false, java.util.List.of());
+        var member = new com.graphtipper.slice.ClusterMember(
+                testM, java.util.List.of(),
+                new com.graphtipper.slice.Oracle.None(),
+                java.util.List.of(
+                        new com.graphtipper.slice.ArgSlice(0, "row", "int",
+                                new com.graphtipper.slice.SliceResult.Resolved("rowCount()-1"))));
+        var sig = new com.graphtipper.slice.PathSignature(java.util.List.of("E", "C", "target"));
+        var cluster = new com.graphtipper.slice.PathCluster(sig, "E", "C", 3,
+                java.util.List.of(member, member), java.util.List.of(),
+                new com.graphtipper.slice.ClusterSlice(java.util.List.of(
+                        new com.graphtipper.slice.ArgSlice(0, "row", "int",
+                                new com.graphtipper.slice.SliceResult.Resolved("rowCount()-1")))));
+        var consumer = new com.graphtipper.slice.ConsumerContract(
+                "C", "F.java", 1, "body",
+                com.graphtipper.slice.ReturnValueUsage.empty(),
+                com.graphtipper.slice.ExceptionHandlingNearCall.none(),
+                java.util.List.of(), java.util.List.of(cluster), 2);
+        var artifact = new Artifact(target, "", java.util.List.of(), java.util.List.of(),
+                java.util.List.of(consumer), java.util.List.of(), false,
+                new com.graphtipper.slice.LocalContext(java.util.List.of(), java.util.List.of()));
+        var budget = new com.graphtipper.util.TokenBudget(20000); budget.charge(100);
+        String md = new MarkdownRenderer().render(artifact, budget, "abc", "proj");
+        assertThat(md).contains("Sliced args");
+        assertThat(md).contains("rowCount()-1");
+        // Old column header must NOT appear.
+        assertThat(md).doesNotContain("Args at target");
+    }
+
+    @Test
+    void renderStaticSlice_emits_structural_block_when_cluster_has_slice() {
+        var target = new com.graphtipper.model.Node.Method(
+                "m_t", "T.target", "", java.util.List.of(), "", "T.java", 1, 5,
+                "", false, false, java.util.List.of());
+        var clusterSlice = new com.graphtipper.slice.ClusterSlice(java.util.List.of(
+                new com.graphtipper.slice.ArgSlice(0, "row", "int",
+                        new com.graphtipper.slice.SliceResult.Resolved("rowCount()-1")),
+                new com.graphtipper.slice.ArgSlice(1, "col", "int",
+                        new com.graphtipper.slice.SliceResult.LoopVar("col", "0..N-1")),
+                new com.graphtipper.slice.ArgSlice(2, "value", "Text",
+                        new com.graphtipper.slice.SliceResult.Unresolved(
+                                com.graphtipper.slice.UnresolvedReason.FIELD_READ, "commandSpec"))));
+        var sig = new com.graphtipper.slice.PathSignature(java.util.List.of("E", "C", "target"));
+        var cluster = new com.graphtipper.slice.PathCluster(sig, "E", "C", 3,
+                java.util.List.of(), java.util.List.of(), clusterSlice);
+        var consumer = new com.graphtipper.slice.ConsumerContract(
+                "C", "F.java", 1, "body",
+                com.graphtipper.slice.ReturnValueUsage.empty(),
+                com.graphtipper.slice.ExceptionHandlingNearCall.none(),
+                java.util.List.of(), java.util.List.of(cluster), 1);
+        var artifact = new Artifact(target, "", java.util.List.of(), java.util.List.of(),
+                java.util.List.of(consumer), java.util.List.of(), false,
+                new com.graphtipper.slice.LocalContext(java.util.List.of(), java.util.List.of()));
+        var budget = new com.graphtipper.util.TokenBudget(20000); budget.charge(100);
+        String md = new MarkdownRenderer().render(artifact, budget, "abc", "proj");
+        assertThat(md).contains("**Static slice (Tier 2):**");
+        assertThat(md).contains("row");
+        assertThat(md).contains("rowCount()-1");
+        assertThat(md).contains("col");
+        assertThat(md).contains("loop col: 0..N-1");
+        assertThat(md).contains("value");
+        assertThat(md).contains("UNRESOLVED: FIELD_READ");
+    }
+
+    @Test
+    void renderStaticSlice_collapses_to_oneline_when_all_args_unresolved_with_same_reason() {
+        var target = new com.graphtipper.model.Node.Method(
+                "m_t", "T.target", "", java.util.List.of(), "", "T.java", 1, 5,
+                "", false, false, java.util.List.of());
+        var clusterSlice = new com.graphtipper.slice.ClusterSlice(java.util.List.of(
+                new com.graphtipper.slice.ArgSlice(0, "row", "int",
+                        new com.graphtipper.slice.SliceResult.Unresolved(
+                                com.graphtipper.slice.UnresolvedReason.FIELD_READ, "commandSpec")),
+                new com.graphtipper.slice.ArgSlice(1, "col", "int",
+                        new com.graphtipper.slice.SliceResult.Unresolved(
+                                com.graphtipper.slice.UnresolvedReason.FIELD_READ, "commandSpec")),
+                new com.graphtipper.slice.ArgSlice(2, "value", "Text",
+                        new com.graphtipper.slice.SliceResult.Unresolved(
+                                com.graphtipper.slice.UnresolvedReason.FIELD_READ, "commandSpec"))));
+        var sig = new com.graphtipper.slice.PathSignature(java.util.List.of("E", "C", "target"));
+        var cluster = new com.graphtipper.slice.PathCluster(sig, "E", "C", 3,
+                java.util.List.of(), java.util.List.of(), clusterSlice);
+        var consumer = new com.graphtipper.slice.ConsumerContract(
+                "C", "F.java", 1, "body",
+                com.graphtipper.slice.ReturnValueUsage.empty(),
+                com.graphtipper.slice.ExceptionHandlingNearCall.none(),
+                java.util.List.of(), java.util.List.of(cluster), 1);
+        var artifact = new Artifact(target, "", java.util.List.of(), java.util.List.of(),
+                java.util.List.of(consumer), java.util.List.of(), false,
+                new com.graphtipper.slice.LocalContext(java.util.List.of(), java.util.List.of()));
+        var budget = new com.graphtipper.util.TokenBudget(20000); budget.charge(100);
+        String md = new MarkdownRenderer().render(artifact, budget, "abc", "proj");
+        // The collapsed form is a single line summary; the per-arg lines are NOT emitted.
+        assertThat(md).contains("**Static slice (Tier 2):**");
+        assertThat(md).contains("all args unresolved (FIELD_READ)");
+        // Per-arg detailed lines (lines starting with arg names) should not appear.
+        long perArgLineCount = md.lines()
+                .filter(l -> l.startsWith("row") || l.startsWith("col") || l.startsWith("value"))
+                .count();
+        assertThat(perArgLineCount).isZero();
+    }
 }

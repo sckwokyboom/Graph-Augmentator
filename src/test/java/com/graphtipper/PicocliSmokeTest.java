@@ -114,5 +114,14 @@ class PicocliSmokeTest {
         // ≤ 10 cluster blocks rendered
         long clusterCount = content.lines().filter(l -> l.startsWith("#### 4.4.")).count();
         assertThat(clusterCount).isLessThanOrEqualTo(10);
+
+        // Tier 2 (v2.2) slice block presence.
+        assertThat(content).contains("**Static slice (Tier 2):**");
+        // At minimum, expect either a per-arg listing OR the all-args-fail collapse summary.
+        boolean hasSliceContent = content.contains("← <UNRESOLVED")
+                || content.contains("all args unresolved")
+                || content.contains("← \"")
+                || content.contains("← <loop");
+        assertThat(hasSliceContent).isTrue();
     }
 }

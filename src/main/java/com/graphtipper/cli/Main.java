@@ -54,6 +54,18 @@ public final class Main implements Callable<Integer> {
             description = "Include entry-point invocation args as an extra matrix column (off by default)")
     boolean includeTestLevelArgs = false;
 
+    @Option(names = "--slice-depth",
+            description = "Max recursion depth for static slicer (default 15)")
+    int sliceDepth = 15;
+
+    @Option(names = "--slice-branches",
+            description = "Max branch union size before collapse (default 3)")
+    int sliceBranches = 3;
+
+    @Option(names = "--no-slice",
+            description = "Disable Tier 2 static slicer; emit v2.0-compatible artifacts")
+    boolean noSlice = false;
+
     public static void main(String[] args) {
         System.exit(new CommandLine(new Main()).execute(args));
     }
@@ -139,10 +151,21 @@ public final class Main implements Callable<Integer> {
                 }
             }
 
-            // 3. Enrich clusters with oracles and args.
-            var enricher = new ClusterEnricher(oracleExtractor);
-            var enrichedClusters = enricher.enrich(rawClusters,
-                    fqn -> testFqnToFile.get(fqn), chainArgsMap);
+            // 3. Enrich clusters with oracles and args (and Tier 2 static slices unless --no-slice).
+            var enricher = noSlice
+                    ? new ClusterEnricher(oracleExtractor)
+                    : new ClusterEnricher(oracleExtractor, sliceDepth, sliceBranches);
+            var enrichedClusters = noSlice
+                    ? enricher.enrich(rawClusters,
+                            fqn -> testFqnToFile.get(fqn), chainArgsMap)
+                    : enricher.enrich(
+                            rawClusters,
+                            fqn -> testFqnToFile.get(fqn),
+                            consumerFqn -> resolveSourceFile(project, consumerFqn, g),
+                            targetFqn,
+                            java.util.List.of(),   // names default to argN
+                            targetMethod.paramTypes(),
+                            chainArgsMap);
 
             // 4. Apply differential analysis per cluster.
             var differentialAnalyzer = new DifferentialAnalyzer(new ArgRenderer());
