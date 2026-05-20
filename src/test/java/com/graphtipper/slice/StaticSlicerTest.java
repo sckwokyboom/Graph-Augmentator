@@ -383,4 +383,33 @@ class StaticSlicerTest {
                         assertThat(pf.callerSlice()).isInstanceOfSatisfying(SliceResult.Resolved.class, r ->
                                 assertThat(r.value()).isEqualTo("hello")));
     }
+
+    @Test
+    void aggregateCluster_extracts_common_prefix_per_arg_position() {
+        // 2 members, arg0 identical, arg1 differs.
+        var m0args = java.util.List.of(
+                new ArgSlice(0, "row", "int", new SliceResult.Resolved("rowCount()-1")),
+                new ArgSlice(1, "value", "Text", new SliceResult.Resolved("abc")));
+        var m1args = java.util.List.of(
+                new ArgSlice(0, "row", "int", new SliceResult.Resolved("rowCount()-1")),
+                new ArgSlice(1, "value", "Text", new SliceResult.Resolved("def")));
+        var slicer = new StaticSlicer();
+        ClusterSlice cs = slicer.aggregateCluster(java.util.List.of(m0args, m1args));
+        assertThat(cs.args()).hasSize(2);
+        // arg0 identical → common = Resolved("rowCount()-1")
+        assertThat(cs.args().get(0).result())
+                .isInstanceOfSatisfying(SliceResult.Resolved.class, r ->
+                        assertThat(r.value()).isEqualTo("rowCount()-1"));
+        // arg1 differs → common = BranchUnion of the two distinct values
+        assertThat(cs.args().get(1).result())
+                .isInstanceOfSatisfying(SliceResult.BranchUnion.class, bu ->
+                        assertThat(bu.branches()).hasSize(2));
+    }
+
+    @Test
+    void aggregateCluster_handles_empty_input() {
+        var slicer = new StaticSlicer();
+        ClusterSlice cs = slicer.aggregateCluster(java.util.List.of());
+        assertThat(cs.args()).isEmpty();
+    }
 }

@@ -160,6 +160,39 @@ public final class StaticSlicer {
         return out;
     }
 
+    /**
+     * Aggregate per-member arg slices into a per-cluster ClusterSlice. For each arg position,
+     * if all members share the same {@link SliceResult}, use it directly. If they differ,
+     * collapse the distinct results into a {@link SliceResult.BranchUnion} (capped at
+     * {@code maxBranches}; above → {@code Unresolved(BRANCH_EXPLOSION)}).
+     */
+    public ClusterSlice aggregateCluster(List<List<ArgSlice>> perMemberArgs) {
+        if (perMemberArgs.isEmpty() || perMemberArgs.get(0).isEmpty()) {
+            return ClusterSlice.empty();
+        }
+        int numArgs = perMemberArgs.get(0).size();
+        List<ArgSlice> aggregated = new java.util.ArrayList<>();
+        for (int a = 0; a < numArgs; a++) {
+            String name = perMemberArgs.get(0).get(a).argName();
+            String type = perMemberArgs.get(0).get(a).argType();
+            java.util.LinkedHashSet<SliceResult> distinct = new java.util.LinkedHashSet<>();
+            for (var member : perMemberArgs) {
+                if (a < member.size()) distinct.add(member.get(a).result());
+            }
+            SliceResult result;
+            if (distinct.size() == 1) {
+                result = distinct.iterator().next();
+            } else if (distinct.size() > maxBranches) {
+                result = new SliceResult.Unresolved(UnresolvedReason.BRANCH_EXPLOSION,
+                        distinct.size() + " distinct member resolutions");
+            } else {
+                result = new SliceResult.BranchUnion(java.util.List.copyOf(distinct));
+            }
+            aggregated.add(new ArgSlice(a, name, type, result));
+        }
+        return new ClusterSlice(aggregated);
+    }
+
     private SliceResult intraProcBackwardSlice(NameExpr nameRef, MethodDeclaration method,
                                                 List<MethodDeclaration> callChain, int depth) {
         String varName = nameRef.getNameAsString();
