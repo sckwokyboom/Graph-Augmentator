@@ -152,6 +152,8 @@ public final class MarkdownRenderer {
         sb.append("**Path:** ").append(renderPathSignature(cluster.signature())).append("\n");
         sb.append("**Depth:** ").append(cluster.depth()).append("\n\n");
 
+        renderStaticSlice(sb, cluster);
+
         if (cluster.members().isEmpty()) {
             sb.append("_(no member tests resolved)_\n\n");
             return;
@@ -209,6 +211,41 @@ public final class MarkdownRenderer {
                 sb.append("\n");
             }
             sb.append("\n");
+        }
+    }
+
+    private void renderStaticSlice(StringBuilder sb, com.graphtipper.slice.PathCluster cluster) {
+        var cs = cluster.clusterSlice();
+        if (cs == null || cs.args().isEmpty()) return;
+        sb.append("**Static slice (Tier 2):**\n\n");
+
+        // Collapse policy: if all args are Unresolved with the same reason → one-line summary.
+        com.graphtipper.slice.UnresolvedReason commonReason = null;
+        boolean allUnresolvedSameReason = !cs.args().isEmpty();
+        for (var as : cs.args()) {
+            if (!(as.result() instanceof com.graphtipper.slice.SliceResult.Unresolved u)) {
+                allUnresolvedSameReason = false; break;
+            }
+            if (commonReason == null) commonReason = u.reason();
+            else if (commonReason != u.reason()) { allUnresolvedSameReason = false; break; }
+        }
+        if (allUnresolvedSameReason) {
+            sb.append("all args unresolved (").append(commonReason)
+              .append("); inspect direct tests / test method literals to understand actual values.\n\n");
+            return;
+        }
+
+        // Full per-arg form.
+        var argRenderer = new ArgRenderer();
+        for (var argSlice : cs.args()) {
+            sb.append(argSlice.argName());
+            if (argSlice.argType() != null && !argSlice.argType().isBlank()
+                    && !"?".equals(argSlice.argType())) {
+                sb.append(" (").append(argSlice.argType()).append(")");
+            }
+            sb.append(":\n  ← ");
+            sb.append(argRenderer.renderSliceResult(argSlice.result()));
+            sb.append("\n\n");
         }
     }
 
