@@ -15,7 +15,7 @@ public final class JsonRenderer {
 
     public String render(Artifact a) {
         ObjectNode root = M.createObjectNode();
-        root.put("schemaVersion", "2.0");
+        root.put("schemaVersion", "2.2");
 
         // Target
         ObjectNode target = root.putObject("target");
@@ -105,12 +105,70 @@ public final class JsonRenderer {
             mo.put("line", m.testMethod().lineStart());
             renderArgs(mo.putArray("argsAtTarget"), m.argsAtTarget());
             mo.set("oracle", renderOracleNode(m.oracle()));
+            // argSlices (v2.2)
+            if (m.argSlices() != null && !m.argSlices().isEmpty()) {
+                ArrayNode asArr = mo.putArray("argSlices");
+                for (var as : m.argSlices()) {
+                    ObjectNode ao = asArr.addObject();
+                    ao.put("argPosition", as.argPosition());
+                    ao.put("argName", as.argName());
+                    ao.set("result", encodeSliceResult(as.result()));
+                }
+            }
         }
         ArrayNode sigs = out.putArray("behaviorSignals");
         for (var s : cluster.signals()) {
             ObjectNode so = sigs.addObject();
             so.put("tag", s.tag());
             so.put("evidence", s.evidence());
+        }
+        // structuralSlice (v2.2)
+        if (cluster.clusterSlice() != null && !cluster.clusterSlice().args().isEmpty()) {
+            ObjectNode ss = out.putObject("structuralSlice");
+            ArrayNode ssArgs = ss.putArray("args");
+            for (var as : cluster.clusterSlice().args()) {
+                ObjectNode ao = ssArgs.addObject();
+                ao.put("argPosition", as.argPosition());
+                ao.put("argName", as.argName());
+                ao.put("argType", as.argType());
+                ao.set("result", encodeSliceResult(as.result()));
+            }
+        }
+        return out;
+    }
+
+    private ObjectNode encodeSliceResult(com.graphtipper.slice.SliceResult r) {
+        ObjectNode out = M.createObjectNode();
+        switch (r) {
+            case com.graphtipper.slice.SliceResult.Resolved res -> {
+                out.put("kind", "Resolved");
+                out.put("value", String.valueOf(res.value()));
+            }
+            case com.graphtipper.slice.SliceResult.Unresolved u -> {
+                out.put("kind", "Unresolved");
+                out.put("reason", u.reason().name());
+                out.put("detail", u.detail());
+            }
+            case com.graphtipper.slice.SliceResult.LoopVar lv -> {
+                out.put("kind", "LoopVar");
+                out.put("name", lv.name());
+                if (lv.range() != null) out.put("range", lv.range());
+            }
+            case com.graphtipper.slice.SliceResult.BranchUnion bu -> {
+                out.put("kind", "BranchUnion");
+                ArrayNode branches = out.putArray("branches");
+                for (var b : bu.branches()) branches.add(encodeSliceResult(b));
+            }
+            case com.graphtipper.slice.SliceResult.ParamFromCaller pf -> {
+                out.put("kind", "ParamFromCaller");
+                out.set("callerSlice", encodeSliceResult(pf.callerSlice()));
+            }
+            case com.graphtipper.slice.SliceResult.Derived d -> {
+                out.put("kind", "Derived");
+                out.put("derivedKind", d.kind().name());
+                ArrayNode parts = out.putArray("parts");
+                for (var p : d.parts()) parts.add(encodeSliceResult(p));
+            }
         }
         return out;
     }
