@@ -25,9 +25,22 @@ public final class DifferentialAnalyzer {
 
     public List<BehaviorSignal> analyze(PathCluster cluster) {
         var out = new ArrayList<BehaviorSignal>();
+        // Slice-derived signals run independent of member-count (they read clusterSlice aggregate).
+        addSliceDerivedSignals(cluster, out);
         if (cluster.members().size() < 2) return out;
         int argCount = maxArgCount(cluster.members());
         for (int i = 0; i < argCount; i++) {
+            // Skip emission when the cluster slice already conveys this info via a more specific signal.
+            if (cluster.clusterSlice() != null
+                    && i < cluster.clusterSlice().args().size()) {
+                SliceResult sr = cluster.clusterSlice().args().get(i).result();
+                if (sr instanceof SliceResult.Resolved
+                        || sr instanceof SliceResult.LoopVar
+                        || sr instanceof SliceResult.BranchUnion
+                        || sr instanceof SliceResult.Unresolved) {
+                    continue;  // slice-derived signal covers this — skip the invariant tautology
+                }
+            }
             if (isInvariantAt(cluster.members(), i)) {
                 out.add(new BehaviorSignal(
                         "arg" + i + "_invariant_in_cluster",
@@ -74,6 +87,54 @@ public final class DifferentialAnalyzer {
             }
         }
         return out;
+    }
+
+    private void addSliceDerivedSignals(PathCluster cluster, List<BehaviorSignal> out) {
+        if (cluster.clusterSlice() == null) return;
+        for (ArgSlice as : cluster.clusterSlice().args()) {
+            String paramName = as.argName();
+            if (as.result() instanceof SliceResult.Resolved r) {
+                out.add(new BehaviorSignal(
+                        paramName + "_resolves_to_literal",
+                        "All " + cluster.members().size() + " members resolve "
+                                + paramName + " to " + renderValue(r.value())));
+            } else if (as.result() instanceof SliceResult.Unresolved u) {
+                out.add(new BehaviorSignal(
+                        paramName + "_requires_dynamic_value",
+                        paramName + " unresolved (" + u.reason() + "); "
+                                + "inspect direct tests / test method literals for actual values"));
+            } else if (as.result() instanceof SliceResult.LoopVar lv) {
+                out.add(new BehaviorSignal(
+                        paramName + "_is_loop_var",
+                        paramName + " iterates over " + (lv.range() != null ? lv.range() : "<unknown range>")));
+            } else if (as.result() instanceof SliceResult.BranchUnion bu) {
+                out.add(new BehaviorSignal(
+                        paramName + "_resolves_to_branch_union",
+                        "All members resolve " + paramName + " to one of "
+                                + bu.branches().size() + " statically known branches"));
+            }
+        }
+
+        // Cluster-level summary: how many args resolved?
+        int resolved = 0, total = cluster.clusterSlice().args().size();
+        for (var as : cluster.clusterSlice().args()) {
+            if (as.result() instanceof SliceResult.Resolved
+                    || as.result() instanceof SliceResult.LoopVar
+                    || as.result() instanceof SliceResult.BranchUnion) {
+                resolved++;
+            }
+        }
+        if (total > 0 && resolved > 0 && resolved < total) {
+            out.add(new BehaviorSignal(
+                    "cluster_partial_resolution",
+                    resolved + "/" + total + " args statically resolved"));
+        }
+    }
+
+    private static String renderValue(Object v) {
+        if (v == null) return "null";
+        if (v instanceof String s) return "\"" + s + "\"";
+        return String.valueOf(v);
     }
 
     private int maxArgCount(List<ClusterMember> members) {

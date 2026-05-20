@@ -98,4 +98,77 @@ class DifferentialAnalyzerTest {
         var signals = new DifferentialAnalyzer(new ArgRenderer()).analyze(cluster);
         assertThat(signals).extracting(BehaviorSignal::tag).contains("oracle_varies_only_with_arg1");
     }
+
+    @Test
+    void emits_paramName_resolves_to_literal_when_all_members_resolve_same() {
+        var members = java.util.List.of(
+                memberWithSlices(0, "row", "int", new SliceResult.Resolved("rowCount()-1")),
+                memberWithSlices(0, "row", "int", new SliceResult.Resolved("rowCount()-1")));
+        var cluster = new PathCluster(
+                new PathSignature(java.util.List.of("E", "C", "target")),
+                "E", "C", 3, members, java.util.List.of(),
+                new ClusterSlice(java.util.List.of(
+                        new ArgSlice(0, "row", "int", new SliceResult.Resolved("rowCount()-1")))));
+        var signals = new DifferentialAnalyzer(new com.graphtipper.render.ArgRenderer()).analyze(cluster);
+        assertThat(signals).extracting(BehaviorSignal::tag)
+                .contains("row_resolves_to_literal");
+    }
+
+    @Test
+    void emits_paramName_requires_dynamic_value_when_all_unresolved_same_reason() {
+        var members = java.util.List.of(
+                memberWithSlices(0, "value", "Text",
+                        new SliceResult.Unresolved(UnresolvedReason.FIELD_READ, "commandSpec")),
+                memberWithSlices(0, "value", "Text",
+                        new SliceResult.Unresolved(UnresolvedReason.FIELD_READ, "commandSpec")));
+        var cluster = new PathCluster(
+                new PathSignature(java.util.List.of("E", "C", "target")),
+                "E", "C", 3, members, java.util.List.of(),
+                new ClusterSlice(java.util.List.of(
+                        new ArgSlice(0, "value", "Text",
+                                new SliceResult.Unresolved(UnresolvedReason.FIELD_READ, "commandSpec")))));
+        var signals = new DifferentialAnalyzer(new com.graphtipper.render.ArgRenderer()).analyze(cluster);
+        assertThat(signals).extracting(BehaviorSignal::tag)
+                .contains("value_requires_dynamic_value");
+    }
+
+    @Test
+    void emits_paramName_is_loop_var_when_cluster_slice_is_loop_var() {
+        var members = java.util.List.of(
+                memberWithSlices(1, "col", "int", new SliceResult.LoopVar("col", "0..N-1")));
+        var cluster = new PathCluster(
+                new PathSignature(java.util.List.of("E", "C", "target")),
+                "E", "C", 3, members, java.util.List.of(),
+                new ClusterSlice(java.util.List.of(
+                        new ArgSlice(1, "col", "int", new SliceResult.LoopVar("col", "0..N-1")))));
+        var signals = new DifferentialAnalyzer(new com.graphtipper.render.ArgRenderer()).analyze(cluster);
+        assertThat(signals).extracting(BehaviorSignal::tag)
+                .contains("col_is_loop_var");
+    }
+
+    @Test
+    void drops_paramName_invariant_when_slice_has_resolved_value_for_same_param() {
+        // If clusterSlice has Resolved for arg0 (row), the tautological "arg0_invariant_in_cluster"
+        // signal is dropped (the resolved value carries more info).
+        var members = java.util.List.of(
+                memberWithSlices(0, "row", "int", new SliceResult.Resolved("rowCount()-1")),
+                memberWithSlices(0, "row", "int", new SliceResult.Resolved("rowCount()-1")));
+        var cluster = new PathCluster(
+                new PathSignature(java.util.List.of("E", "C", "target")),
+                "E", "C", 3, members, java.util.List.of(),
+                new ClusterSlice(java.util.List.of(
+                        new ArgSlice(0, "row", "int", new SliceResult.Resolved("rowCount()-1")))));
+        var signals = new DifferentialAnalyzer(new com.graphtipper.render.ArgRenderer()).analyze(cluster);
+        // resolves_to_literal present, invariant_in_cluster dropped.
+        assertThat(signals).extracting(BehaviorSignal::tag)
+                .contains("row_resolves_to_literal")
+                .doesNotContain("row_invariant_in_cluster", "arg0_invariant_in_cluster");
+    }
+
+    private static ClusterMember memberWithSlices(int argIdx, String name, String type, SliceResult result) {
+        var node = new com.graphtipper.model.Node.Method(
+                "m_t", "T.testFoo", "", java.util.List.of(), "", "T.java", 1, 1, "", true, false, java.util.List.of());
+        return new ClusterMember(node, java.util.List.of(), new Oracle.None(),
+                java.util.List.of(new ArgSlice(argIdx, name, type, result)));
+    }
 }
