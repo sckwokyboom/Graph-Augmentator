@@ -98,22 +98,39 @@ public final class ClusterEnricher {
             }
 
             // Phase 2: static slice pass.
+            String targetSimple = targetFqn.contains(".") ? targetFqn.substring(targetFqn.lastIndexOf('.') + 1) : targetFqn;
             Path consumerFile = consumerFileResolver.resolve(c.immediateConsumer());
-            Optional<MethodDeclaration> consumerMd = consumerFile == null
-                    ? Optional.empty()
-                    : resolveMethodDecl(consumerFile, c.immediateConsumer());
+            // Resolve all overloads of the consumer's method, then pick the one that
+            // actually contains a call to the target. (Picocli's addRowValues exists in
+            // two overloads — String... and Text... — and only the latter calls putValue.)
+            List<MethodDeclaration> consumerOverloads = consumerFile == null
+                    ? List.of()
+                    : resolveAllMethodDecls(consumerFile, c.immediateConsumer());
 
-            if (consumerMd.isEmpty()) {
+            MethodDeclaration consumerMd = null;
+            List<MethodCallExpr> targetCallsInConsumer = List.of();
+            for (var cand : consumerOverloads) {
+                var calls = cand.findAll(MethodCallExpr.class).stream()
+                        .filter(call -> call.getNameAsString().equals(targetSimple))
+                        .toList();
+                if (!calls.isEmpty()) {
+                    consumerMd = cand;
+                    targetCallsInConsumer = calls;
+                    break;
+                }
+            }
+            if (consumerMd == null && !consumerOverloads.isEmpty()) {
+                // Fallback: keep the first overload so we at least pad with NOT_FOUND
+                // (rather than PARSE_ERROR which implies file-level failure).
+                consumerMd = consumerOverloads.get(0);
+            }
+
+            if (consumerMd == null) {
                 var padded = padMembersWithUnresolved(enrichedMembers, targetParamNames, targetParamTypes,
                         UnresolvedReason.PARSE_ERROR, "consumer " + c.immediateConsumer() + " not resolvable");
                 out.add(c.withMembers(padded).withClusterSlice(aggregateOrEmpty(padded, slicer)));
                 continue;
             }
-
-            String targetSimple = targetFqn.contains(".") ? targetFqn.substring(targetFqn.lastIndexOf('.') + 1) : targetFqn;
-            List<MethodCallExpr> targetCallsInConsumer = consumerMd.get().findAll(MethodCallExpr.class).stream()
-                    .filter(call -> call.getNameAsString().equals(targetSimple))
-                    .toList();
 
             if (targetCallsInConsumer.isEmpty()) {
                 var padded = padMembersWithUnresolved(enrichedMembers, targetParamNames, targetParamTypes,
@@ -133,7 +150,7 @@ public final class ClusterEnricher {
                         : resolveMethodDecl(testFile, m.testMethod().fqn());
                 chains.add(testMd.<List<MethodDeclaration>>map(List::of).orElse(List.of()));
             }
-            var perMember = slicer.sliceCluster(calls, chains, consumerMd.get(),
+            var perMember = slicer.sliceCluster(calls, chains, consumerMd,
                     targetParamNames, targetParamTypes);
             var fullyEnriched = new ArrayList<ClusterMember>(enrichedMembers.size());
             for (int i = 0; i < enrichedMembers.size(); i++) {
@@ -152,11 +169,15 @@ public final class ClusterEnricher {
             List<String> paramTypes,
             UnresolvedReason reason,
             String detail) {
+        // Use the union of available naming sources so we still emit per-arg slices when
+        // only paramTypes (or only argsAtTarget) tells us how many args there are.
+        int memberMaxArgs = members.stream().mapToInt(m -> m.argsAtTarget().size()).max().orElse(0);
+        int argCount = Math.max(Math.max(paramNames.size(), paramTypes.size()), memberMaxArgs);
         var padded = new ArrayList<ClusterMember>(members.size());
         for (ClusterMember m : members) {
-            List<ArgSlice> argSlices = new ArrayList<>(paramNames.size());
-            for (int a = 0; a < paramNames.size(); a++) {
-                String name = paramNames.get(a);
+            List<ArgSlice> argSlices = new ArrayList<>(argCount);
+            for (int a = 0; a < argCount; a++) {
+                String name = a < paramNames.size() ? paramNames.get(a) : "arg" + a;
                 String type = a < paramTypes.size() ? paramTypes.get(a) : "?";
                 argSlices.add(new ArgSlice(a, name, type, new SliceResult.Unresolved(reason, detail)));
             }
@@ -171,10 +192,16 @@ public final class ClusterEnricher {
     }
 
     private static Optional<MethodDeclaration> resolveMethodDecl(Path file, String fqn) {
+        var all = resolveAllMethodDecls(file, fqn);
+        return all.isEmpty() ? Optional.empty() : Optional.of(all.get(0));
+    }
+
+    /** Resolve all overloads matching {@code fqn} (same simple-class + method-name). */
+    private static List<MethodDeclaration> resolveAllMethodDecls(Path file, String fqn) {
         try {
             var cu = com.github.javaparser.StaticJavaParser.parse(file.toFile());
             int lastDot = fqn.lastIndexOf('.');
-            if (lastDot < 0) return Optional.empty();
+            if (lastDot < 0) return List.of();
             String methodName = fqn.substring(lastDot + 1);
             String enclosingFqn = fqn.substring(0, lastDot);
             int sep = Math.max(enclosingFqn.lastIndexOf('.'), enclosingFqn.lastIndexOf('$'));
@@ -183,9 +210,9 @@ public final class ClusterEnricher {
                     .filter(m -> m.getNameAsString().equals(methodName))
                     .filter(m -> m.findAncestor(TypeDeclaration.class)
                             .map(t -> t.getNameAsString().equals(simpleClass)).orElse(false))
-                    .findFirst();
+                    .toList();
         } catch (Exception e) {
-            return Optional.empty();
+            return List.of();
         }
     }
 }
