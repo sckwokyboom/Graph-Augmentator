@@ -345,4 +345,42 @@ class StaticSlicerTest {
             assertThat(lv.range()).contains("n");
         });
     }
+
+    @Test
+    void sliceCluster_returns_per_member_argSlices_and_clusterSlice() {
+        // Build minimal cluster: 1 member, simple chain.
+        var cu = com.github.javaparser.StaticJavaParser.parse(
+                "class C { " +
+                "  void test() { entry(\"hello\"); } " +
+                "  void entry(String s) { target(s); } " +
+                "  void target(String t) {} " +
+                "}");
+        var test = cu.findAll(com.github.javaparser.ast.body.MethodDeclaration.class).stream()
+                .filter(m -> m.getNameAsString().equals("test")).findFirst().orElseThrow();
+        var entry = cu.findAll(com.github.javaparser.ast.body.MethodDeclaration.class).stream()
+                .filter(m -> m.getNameAsString().equals("entry")).findFirst().orElseThrow();
+        var targetCall = entry.findAll(com.github.javaparser.ast.expr.MethodCallExpr.class).stream()
+                .filter(c -> c.getNameAsString().equals("target")).findFirst().orElseThrow();
+
+        // The slicer at cluster level should be invocable with:
+        // sliceCluster(callsToTarget : List<MethodCallExpr>, callChains : List<List<MethodDeclaration>>,
+        //              targetParamNames : List<String>, targetParamTypes : List<String>)
+        //   → List<List<ArgSlice>> (one inner List per member)
+        var slicer = new StaticSlicer();
+        var perMember = slicer.sliceCluster(
+                java.util.List.of(targetCall),
+                java.util.List.of(java.util.List.of(test)),  // member 0's callChain: just `test` (entry is current)
+                entry,  // immediate consumer (where the call to target lives)
+                java.util.List.of("t"),     // target param names
+                java.util.List.of("String") // target param types
+        );
+        assertThat(perMember).hasSize(1);  // 1 member
+        var argSlices = perMember.get(0);
+        assertThat(argSlices).hasSize(1);  // 1 arg
+        assertThat(argSlices.get(0).argName()).isEqualTo("t");
+        assertThat(argSlices.get(0).result())
+                .isInstanceOfSatisfying(SliceResult.ParamFromCaller.class, pf ->
+                        assertThat(pf.callerSlice()).isInstanceOfSatisfying(SliceResult.Resolved.class, r ->
+                                assertThat(r.value()).isEqualTo("hello")));
+    }
 }

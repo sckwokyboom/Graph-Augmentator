@@ -120,6 +120,46 @@ public final class StaticSlicer {
                 expr.getClass().getSimpleName());
     }
 
+    /**
+     * Slice all target args for every member of a cluster.
+     *
+     * @param targetCallsPerMember per-member {@link MethodCallExpr} pointing to the target's call site
+     *                             inside the immediate consumer
+     * @param callChainsPerMember  per-member list of methods from test to immediate consumer's caller
+     *                             (exclusive of the immediate consumer itself, which is passed separately)
+     * @param immediateConsumer    the consumer method containing the target call(s)
+     * @param targetParamNames     formal parameter names of the target (for naming arg slices)
+     * @param targetParamTypes     formal parameter type strings
+     * @return per-member list of arg slices (size N args)
+     */
+    public List<List<ArgSlice>> sliceCluster(
+            List<MethodCallExpr> targetCallsPerMember,
+            List<List<MethodDeclaration>> callChainsPerMember,
+            MethodDeclaration immediateConsumer,
+            List<String> targetParamNames,
+            List<String> targetParamTypes) {
+
+        if (targetCallsPerMember.size() != callChainsPerMember.size()) {
+            throw new IllegalArgumentException(
+                    "calls (" + targetCallsPerMember.size() + ") != chains (" + callChainsPerMember.size() + ")");
+        }
+        cache.clear();
+        List<List<ArgSlice>> out = new java.util.ArrayList<>();
+        for (int i = 0; i < targetCallsPerMember.size(); i++) {
+            MethodCallExpr call = targetCallsPerMember.get(i);
+            List<MethodDeclaration> chain = callChainsPerMember.get(i);
+            List<ArgSlice> argSlices = new java.util.ArrayList<>();
+            for (int a = 0; a < call.getArguments().size(); a++) {
+                String name = a < targetParamNames.size() ? targetParamNames.get(a) : "arg" + a;
+                String type = a < targetParamTypes.size() ? targetParamTypes.get(a) : "?";
+                SliceResult r = slice(call.getArgument(a), immediateConsumer, chain, 0);
+                argSlices.add(new ArgSlice(a, name, type, r));
+            }
+            out.add(argSlices);
+        }
+        return out;
+    }
+
     private SliceResult intraProcBackwardSlice(NameExpr nameRef, MethodDeclaration method,
                                                 List<MethodDeclaration> callChain, int depth) {
         String varName = nameRef.getNameAsString();
