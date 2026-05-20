@@ -225,6 +225,42 @@ class MarkdownRendererTest {
     }
 
     @Test
+    void matrix_uses_sliced_args_column_when_members_have_argSlices() {
+        var target = new com.graphtipper.model.Node.Method(
+                "m_t", "T.target", "", java.util.List.of(), "", "T.java", 1, 5,
+                "", false, false, java.util.List.of());
+        var testM = new com.graphtipper.model.Node.Method(
+                "m_test", "Test.foo", "", java.util.List.of(), "", "Test.java", 1, 1,
+                "", true, false, java.util.List.of());
+        var member = new com.graphtipper.slice.ClusterMember(
+                testM, java.util.List.of(),
+                new com.graphtipper.slice.Oracle.None(),
+                java.util.List.of(
+                        new com.graphtipper.slice.ArgSlice(0, "row", "int",
+                                new com.graphtipper.slice.SliceResult.Resolved("rowCount()-1"))));
+        var sig = new com.graphtipper.slice.PathSignature(java.util.List.of("E", "C", "target"));
+        var cluster = new com.graphtipper.slice.PathCluster(sig, "E", "C", 3,
+                java.util.List.of(member, member), java.util.List.of(),
+                new com.graphtipper.slice.ClusterSlice(java.util.List.of(
+                        new com.graphtipper.slice.ArgSlice(0, "row", "int",
+                                new com.graphtipper.slice.SliceResult.Resolved("rowCount()-1")))));
+        var consumer = new com.graphtipper.slice.ConsumerContract(
+                "C", "F.java", 1, "body",
+                com.graphtipper.slice.ReturnValueUsage.empty(),
+                com.graphtipper.slice.ExceptionHandlingNearCall.none(),
+                java.util.List.of(), java.util.List.of(cluster), 2);
+        var artifact = new Artifact(target, "", java.util.List.of(), java.util.List.of(),
+                java.util.List.of(consumer), java.util.List.of(), false,
+                new com.graphtipper.slice.LocalContext(java.util.List.of(), java.util.List.of()));
+        var budget = new com.graphtipper.util.TokenBudget(20000); budget.charge(100);
+        String md = new MarkdownRenderer().render(artifact, budget, "abc", "proj");
+        assertThat(md).contains("Sliced args");
+        assertThat(md).contains("rowCount()-1");
+        // Old column header must NOT appear.
+        assertThat(md).doesNotContain("Args at target");
+    }
+
+    @Test
     void renderStaticSlice_emits_structural_block_when_cluster_has_slice() {
         var target = new com.graphtipper.model.Node.Method(
                 "m_t", "T.target", "", java.util.List.of(), "", "T.java", 1, 5,

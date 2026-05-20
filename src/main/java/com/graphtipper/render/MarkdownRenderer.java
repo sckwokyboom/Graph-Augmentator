@@ -186,13 +186,16 @@ public final class MarkdownRenderer {
         // Differential matrix — up to 5 rows.
         sb.append("**Differential matrix (").append(Math.min(cluster.members().size(), 5))
           .append(" representatives of ").append(cluster.members().size()).append("):**\n\n");
-        sb.append("| Test | Args at target | Oracle |\n");
+        sb.append("| Test | Sliced args | Oracle |\n");
         sb.append("|---|---|---|\n");
         int rows = Math.min(cluster.members().size(), 5);
         for (int i = 0; i < rows; i++) {
             var m = cluster.members().get(i);
+            String slicedArgs = m.argSlices().isEmpty()
+                    ? argRenderer.renderTuple(m.argsAtTarget())   // fallback to legacy
+                    : renderSlicedArgsTuple(m.argSlices(), argRenderer);
             sb.append("| `").append(m.testMethod().fqn()).append("` | ")
-              .append(escapePipes(argRenderer.renderTuple(m.argsAtTarget()))).append(" | ")
+              .append(escapePipes(slicedArgs)).append(" | ")
               .append(escapePipes(renderOracle(m.oracle()))).append(" |\n");
         }
         if (cluster.members().size() > 5) {
@@ -212,6 +215,13 @@ public final class MarkdownRenderer {
             }
             sb.append("\n");
         }
+    }
+
+    private static String renderSlicedArgsTuple(
+            java.util.List<com.graphtipper.slice.ArgSlice> argSlices, ArgRenderer renderer) {
+        var parts = new java.util.ArrayList<String>();
+        for (var as : argSlices) parts.add(renderer.renderSliceResult(as.result()));
+        return "(" + String.join(", ", parts) + ")";
     }
 
     private void renderStaticSlice(StringBuilder sb, com.graphtipper.slice.PathCluster cluster) {
