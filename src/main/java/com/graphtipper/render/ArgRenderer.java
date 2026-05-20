@@ -39,6 +39,44 @@ public final class ArgRenderer {
         return "(" + args.stream().map(this::render).collect(Collectors.joining(", ")) + ")";
     }
 
+    /** Render a {@link com.graphtipper.slice.SliceResult} to its compact Markdown form. */
+    public String renderSliceResult(com.graphtipper.slice.SliceResult r) {
+        return switch (r) {
+            case com.graphtipper.slice.SliceResult.Resolved res -> renderValue(res.value());
+            case com.graphtipper.slice.SliceResult.Unresolved u -> "<UNRESOLVED: " + u.reason() + ">";
+            case com.graphtipper.slice.SliceResult.LoopVar lv ->
+                    "<loop " + lv.name() + (lv.range() != null ? ": " + lv.range() : "") + ">";
+            case com.graphtipper.slice.SliceResult.BranchUnion bu -> {
+                var parts = new java.util.ArrayList<String>();
+                for (var b : bu.branches()) parts.add(renderSliceResult(b));
+                yield "(" + String.join(" | ", parts) + ")";
+            }
+            case com.graphtipper.slice.SliceResult.ParamFromCaller pf ->
+                    renderSliceResult(pf.callerSlice());
+            case com.graphtipper.slice.SliceResult.Derived d ->
+                    renderDerived(d);
+        };
+    }
+
+    private String renderDerived(com.graphtipper.slice.SliceResult.Derived d) {
+        var parts = new java.util.ArrayList<String>();
+        for (var p : d.parts()) parts.add(renderSliceResult(p));
+        return switch (d.kind()) {
+            case ARRAY_LITERAL -> "{" + String.join(", ", parts) + "}";
+            case OBJECT_CREATION -> "new(" + String.join(", ", parts) + ")";
+            case ARRAY_ACCESS -> parts.get(0) + "[" + parts.get(1) + "]";
+            case CONCATENATION -> String.join(" + ", parts);
+            case BINARY_OP -> String.join(" op ", parts);
+            case CAST -> parts.get(0);
+        };
+    }
+
+    private static String renderValue(Object v) {
+        if (v == null) return "null";
+        if (v instanceof String s) return "\"" + s + "\"";
+        return String.valueOf(v);
+    }
+
     private static String shortFqn(String fqn) {
         if (fqn == null) return "<unknown>";
         int lastDot = fqn.lastIndexOf('.');
