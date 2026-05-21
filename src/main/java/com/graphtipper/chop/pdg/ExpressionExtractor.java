@@ -8,6 +8,7 @@ import com.github.javaparser.ast.expr.Expression;
 import com.github.javaparser.ast.expr.FieldAccessExpr;
 import com.github.javaparser.ast.expr.LiteralExpr;
 import com.github.javaparser.ast.expr.MethodCallExpr;
+import com.github.javaparser.ast.expr.NameExpr;
 import com.github.javaparser.ast.stmt.DoStmt;
 import com.github.javaparser.ast.stmt.ForEachStmt;
 import com.github.javaparser.ast.stmt.ForStmt;
@@ -65,6 +66,9 @@ public final class ExpressionExtractor {
                 } else if (n instanceof FieldAccessExpr fa) {
                     created = mkExpr(fa, ref, sn.id(), ExpressionKind.FIELD_REF,
                         fa.toString(), md);
+                } else if (n instanceof NameExpr ne) {
+                    created = mkExpr(ne, ref, sn.id(), ExpressionKind.LOCAL_USE,
+                        ne.getNameAsString(), md);
                 }
                 if (created != null) {
                     all.add(created); map.put(n, created);
