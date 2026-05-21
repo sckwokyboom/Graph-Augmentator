@@ -11,9 +11,15 @@ import java.util.stream.Stream;
 public final class SourceHash {
     private SourceHash() {}
 
+    // Bump when the Joern export shape changes so previously-cached exports are not
+    // mis-read by the importer expecting the newer vertex/edge labels.
+    private static final byte[] CACHE_SALT = "graph-tipper/export.v3".getBytes();
+
     public static String ofJavaSources(Path projectRoot) {
         try {
             MessageDigest md = MessageDigest.getInstance("SHA-256");
+            md.update(CACHE_SALT);
+            md.update((byte) 0);
             List<Path> files = new ArrayList<>();
             try (Stream<Path> s = Files.walk(projectRoot)) {
                 s.filter(p -> p.toString().endsWith(".java"))
