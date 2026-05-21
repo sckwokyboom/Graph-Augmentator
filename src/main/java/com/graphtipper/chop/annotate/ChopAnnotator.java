@@ -2,7 +2,7 @@ package com.graphtipper.chop.annotate;
 
 import com.graphtipper.chop.model.*;
 import org.jgrapht.Graph;
-import org.jgrapht.graph.DirectedMultigraph;
+import org.jgrapht.graph.DirectedPseudograph;
 
 import java.util.ArrayDeque;
 import java.util.Deque;
@@ -22,7 +22,7 @@ public final class ChopAnnotator {
         EdgeLayer.CG, EdgeLayer.OVERRIDES);
 
     public void annotate(ChopGraph g) {
-        DirectedMultigraph<ChopNode, ChopEdge> jg = g.jgraph();
+        DirectedPseudograph<ChopNode, ChopEdge> jg = g.jgraph();
         Map<StatementId, ChopNode> stmtToNode = new HashMap<>();
         for (ChopNode n : jg.vertexSet()) {
             if (n instanceof StatementNode sn) stmtToNode.put(sn.id(), sn);

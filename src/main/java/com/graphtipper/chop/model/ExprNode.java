@@ -12,4 +12,9 @@ public record ExprNode(
     Set<StatementId> touchedBy,
     boolean isTarget,
     boolean isEntryPoint
-) implements ChopNode {}
+) implements ChopNode {
+    @Override public boolean equals(Object o) {
+        return o instanceof ExprNode other && id.equals(other.id);
+    }
+    @Override public int hashCode() { return id.hashCode(); }
+}

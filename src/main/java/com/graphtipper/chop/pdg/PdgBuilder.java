@@ -47,10 +47,28 @@ public final class PdgBuilder {
 
     private static MethodDeclaration locate(CompilationUnit cu, Node.Method method) {
         String simpleName = method.fqn().substring(method.fqn().lastIndexOf('.') + 1);
-        return cu.findAll(MethodDeclaration.class).stream()
+        var byName = cu.findAll(MethodDeclaration.class).stream()
             .filter(md -> md.getNameAsString().equals(simpleName))
-            .filter(md -> md.getParameters().size() == method.paramTypes().size())
-            .findFirst()
-            .orElseThrow(() -> new IllegalStateException("Method not found: " + method.fqn()));
+            .toList();
+        if (byName.isEmpty()) {
+            throw new IllegalStateException("Method not found: " + method.fqn());
+        }
+        if (byName.size() == 1) return byName.get(0);
+        // Multiple overloads — prefer matching line number when Joern recorded it.
+        if (method.lineStart() > 0) {
+            for (MethodDeclaration md : byName) {
+                var range = md.getRange().orElse(null);
+                if (range != null && range.begin.line == method.lineStart()) return md;
+            }
+        }
+        // Fallback: nearest by line distance.
+        if (method.lineStart() > 0) {
+            return byName.stream()
+                .min((a, b) -> Integer.compare(
+                    Math.abs(a.getRange().map(r -> r.begin.line).orElse(0) - method.lineStart()),
+                    Math.abs(b.getRange().map(r -> r.begin.line).orElse(0) - method.lineStart())))
+                .orElseThrow();
+        }
+        return byName.get(0);
     }
 }

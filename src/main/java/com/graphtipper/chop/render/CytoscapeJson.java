@@ -57,9 +57,9 @@ public final class CytoscapeJson {
 
     private static String idOf(ChopNode n) {
         if (n instanceof MethodNode mn) return "m_" + sanitize(mn.owner().display());
-        if (n instanceof StatementNode sn) return "s_" + sn.id().astNodeId();
-        if (n instanceof ExprNode en) return "e_" + en.id().astNodeId();
-        return "n_" + System.identityHashCode(n);
+        if (n instanceof StatementNode sn) return "s_" + Integer.toUnsignedString(sn.id().astNodeId());
+        if (n instanceof ExprNode en) return "e_" + Integer.toUnsignedString(en.id().astNodeId());
+        return "n_" + Integer.toUnsignedString(System.identityHashCode(n));
     }
     private static String kindOf(ChopNode n) {
         if (n instanceof MethodNode) return "method";

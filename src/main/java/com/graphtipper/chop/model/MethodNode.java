@@ -9,4 +9,8 @@ public record MethodNode(
     Set<StatementId> touchedBy
 ) implements ChopNode {
     @Override public boolean isEntryPoint() { return isTest; }
+    @Override public boolean equals(Object o) {
+        return o instanceof MethodNode other && owner.equals(other.owner);
+    }
+    @Override public int hashCode() { return owner.hashCode(); }
 }

@@ -1,6 +1,6 @@
 package com.graphtipper.chop.model;
 
-import org.jgrapht.graph.DirectedMultigraph;
+import org.jgrapht.graph.DirectedPseudograph;
 
 import java.util.HashSet;
 import java.util.List;
@@ -9,8 +9,8 @@ import java.util.Set;
 
 public final class ChopGraph {
 
-    private final DirectedMultigraph<ChopNode, ChopEdge> jgraph =
-        new DirectedMultigraph<>(ChopEdge.class);
+    private final DirectedPseudograph<ChopNode, ChopEdge> jgraph =
+        new DirectedPseudograph<>(ChopEdge.class);
     private final MethodRef target;
     private final List<StatementId> targetStatements;
     private final Set<MethodRef> entryPoints;
@@ -22,7 +22,7 @@ public final class ChopGraph {
         this.entryPoints = Set.copyOf(entryPoints);
     }
 
-    public DirectedMultigraph<ChopNode, ChopEdge> jgraph() { return jgraph; }
+    public DirectedPseudograph<ChopNode, ChopEdge> jgraph() { return jgraph; }
     public MethodRef target() { return target; }
     public List<StatementId> targetStatements() { return targetStatements; }
     public Set<MethodRef> entryPoints() { return entryPoints; }

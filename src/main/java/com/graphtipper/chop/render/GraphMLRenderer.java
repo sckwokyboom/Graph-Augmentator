@@ -16,10 +16,10 @@ public final class GraphMLRenderer {
 
     public void render(ChopGraph g, Writer out) {
         GraphMLExporter<ChopNode, ChopEdge> exp = new GraphMLExporter<>(n -> {
-            if (n instanceof MethodNode mn) return "m_" + System.identityHashCode(mn);
-            if (n instanceof StatementNode sn) return "s_" + sn.id().astNodeId();
-            if (n instanceof ExprNode en) return "e_" + en.id().astNodeId();
-            return "n_" + System.identityHashCode(n);
+            if (n instanceof MethodNode mn) return "m_" + Integer.toUnsignedString(System.identityHashCode(mn));
+            if (n instanceof StatementNode sn) return "s_" + Integer.toUnsignedString(sn.id().astNodeId());
+            if (n instanceof ExprNode en) return "e_" + Integer.toUnsignedString(en.id().astNodeId());
+            return "n_" + Integer.toUnsignedString(System.identityHashCode(n));
         });
         exp.registerAttribute("kind", GraphMLExporter.AttributeCategory.NODE, AttributeType.STRING);
         exp.registerAttribute("label", GraphMLExporter.AttributeCategory.NODE, AttributeType.STRING);
