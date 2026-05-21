@@ -20,6 +20,7 @@ class IntegrationTest {
         Files.writeString(exportDir.resolve("export.json"), fixtureGraphSon());
 
         int code = new CommandLine(new Main()).execute(
+                "slice",
                 "--project", project.toString(),
                 "--target", "src/main/java/tiny/Adder.java#Adder.add(int,int)",
                 "--out", outDir.toString());

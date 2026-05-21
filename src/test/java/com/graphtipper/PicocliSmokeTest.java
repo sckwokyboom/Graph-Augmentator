@@ -20,6 +20,7 @@ class PicocliSmokeTest {
     void producesArtifactForPutValue(@TempDir Path out) throws Exception {
         Path picocli = Path.of(System.getenv("GRAPHTIPPER_PICOCLI_HOME"));
         int code = new CommandLine(new Main()).execute(
+                "slice",
                 "--project", picocli.toString(),
                 "--target", "src/main/java/picocli/CommandLine.java#TextTable.putValue(int,int,Text)",
                 "--out", out.toString(),
@@ -34,6 +35,7 @@ class PicocliSmokeTest {
     void v2RegressionTextTablePutValue(@TempDir Path out) throws Exception {
         Path picocli = Path.of(System.getenv("GRAPHTIPPER_PICOCLI_HOME"));
         int code = new CommandLine(new Main()).execute(
+                "slice",
                 "--project", picocli.toString(),
                 "--target", "src/main/java/picocli/CommandLine.java#TextTable.putValue(int,int,Text)",
                 "--out", out.toString());
@@ -93,6 +95,7 @@ class PicocliSmokeTest {
         out.toFile().mkdirs();
 
         int rc = new picocli.CommandLine(new com.graphtipper.cli.Main()).execute(
+                "slice",
                 "--project", picocli.toString(),
                 "--target", "src/main/java/picocli/CommandLine.java#TextTable.putValue(int,int,Text)",
                 "--out", out.toString(),
