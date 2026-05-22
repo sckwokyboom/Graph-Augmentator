@@ -39,6 +39,26 @@ class KatzScorerTest {
         assertThat(scorer.score(isolated)).isEqualTo(0.0);
     }
 
+    @Test void scoreLookupIgnoresSignatureSoRendererStubKeysWork() {
+        // Renderer + BudgetPlanner currently build MethodRef(fqn, "") for lookups (no signature
+        // available in PathSignature). The scorer must answer by fqn regardless of signature.
+        MethodRef hubReal = new MethodRef("com.example.Hub", "(int,String)");
+        MethodRef leafReal = new MethodRef("com.example.Leaf", "()");
+        MethodRef targetReal = new MethodRef("com.example.Target", "()");
+        ChopGraph g = new ChopGraph(targetReal, List.of(), Set.of(leafReal));
+        addMethodEdge(g, leafReal, hubReal);
+        addMethodEdge(g, hubReal, targetReal);
+        // also wire a second caller into the hub so it has a non-trivial centrality
+        MethodRef leaf2Real = new MethodRef("com.example.Leaf2", "()");
+        addMethodEdge(g, leaf2Real, hubReal);
+
+        var scorer = new KatzScorer(g);
+        double bySignature = scorer.score(hubReal);
+        double byEmptySig = scorer.score(new MethodRef("com.example.Hub", ""));
+        assertThat(byEmptySig).isEqualTo(bySignature);
+        assertThat(byEmptySig).isGreaterThan(0.0);
+    }
+
     private static void addMethodEdge(ChopGraph g, MethodRef src, MethodRef dst) {
         MethodNode srcNode = new MethodNode(src, /* isTest */ false, /* isTarget */ false, Set.of());
         MethodNode dstNode = new MethodNode(dst, /* isTest */ false, /* isTarget */ false, Set.of());

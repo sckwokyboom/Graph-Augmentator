@@ -15,7 +15,7 @@ public class KatzScorer {
 
     private static final double ALPHA = 0.01;
 
-    private final Map<MethodRef, Double> scores;
+    private final Map<String, Double> scoresByFqn;
 
     public KatzScorer(ChopGraph chop) {
         SimpleDirectedGraph<MethodRef, DefaultEdge> mg = new SimpleDirectedGraph<>(DefaultEdge.class);
@@ -29,14 +29,21 @@ public class KatzScorer {
             if (!mg.containsEdge(s, d)) mg.addEdge(s, d);
         }
         if (mg.vertexSet().isEmpty()) {
-            this.scores = Map.of();
+            this.scoresByFqn = Map.of();
             return;
         }
         var katz = new KatzCentrality<>(mg, ALPHA);
-        this.scores = new HashMap<>(katz.getScores());
+        // Renderer/BudgetPlanner lookups arrive with MethodRef(fqn, "") because PathSignature
+        // tracks fqns only. Aggregate by fqn (max across overloads) so empty-signature lookups hit.
+        Map<MethodRef, Double> raw = katz.getScores();
+        Map<String, Double> agg = new HashMap<>();
+        for (var e : raw.entrySet()) {
+            agg.merge(e.getKey().fqn(), e.getValue(), Math::max);
+        }
+        this.scoresByFqn = agg;
     }
 
     public double score(MethodRef m) {
-        return scores.getOrDefault(m, 0.0);
+        return scoresByFqn.getOrDefault(m.fqn(), 0.0);
     }
 }
