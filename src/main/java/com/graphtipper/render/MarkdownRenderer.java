@@ -17,6 +17,14 @@ public final class MarkdownRenderer {
         sb.append("# Graph-Tipper Augmentation\n\n");
         sb.append("> Generated for: ").append(projectName).append(" @ ").append(projectKey).append("\n");
         sb.append("> Target: ").append(a.target().fqn()).append("\n");
+
+        boolean bare = options != null && options.bare();
+        if (bare) {
+            sb.append("> Mode: bare (signature-only)\n\n");
+            renderTarget(sb, a);
+            return sb.toString();
+        }
+
         String maxLabel = budget.max() == Integer.MAX_VALUE ? "unlimited" : Integer.toString(budget.max());
         int consumerCount = a.consumers().size();
         int clusterCount = a.consumers().stream().mapToInt(c -> c.clusters().size()).sum();
