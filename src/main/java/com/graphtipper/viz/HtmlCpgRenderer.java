@@ -1,0 +1,894 @@
+package com.graphtipper.viz;
+
+import com.graphtipper.model.Edge;
+import com.graphtipper.model.Node;
+import com.graphtipper.model.ProjectGraph;
+
+import java.util.LinkedHashMap;
+import java.util.Locale;
+import java.util.Map;
+
+/**
+ * Renders a full {@link ProjectGraph} as a single self-contained HTML page. The page loads
+ * Cytoscape.js from a CDN and inlines the entire graph as JSON; opening it in a browser
+ * gives you an interactive view (drag, pan, zoom, edge-kind toggles, hover tooltips with
+ * a description for every node/edge kind, search, and an in-browser chop highlighter).
+ */
+public final class HtmlCpgRenderer {
+
+    private static final String CYTOSCAPE_CDN =
+            "https://cdn.jsdelivr.net/npm/cytoscape@3.30.2/dist/cytoscape.min.js";
+
+    private static final Map<String, NodeKindMeta> NODE_KINDS = nodeKinds();
+    private static final Map<String, EdgeKindMeta> EDGE_KINDS = edgeKinds();
+    private static final Map<String, String> NODE_DESCRIPTIONS = descriptions(NODE_KINDS, m -> m.description);
+    private static final Map<String, String> EDGE_DESCRIPTIONS = descriptions(EDGE_KINDS, m -> m.description);
+
+    public String render(ProjectGraph graph, String projectName) {
+        StringBuilder json = new StringBuilder(64 * 1024);
+        emitJson(graph, json);
+        String safe = json.toString().replace("</", "<\\/");
+
+        StringBuilder html = new StringBuilder(80 * 1024);
+        html.append("<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n");
+        html.append("<meta charset=\"utf-8\">\n");
+        html.append("<title>CPG inspector — ").append(escapeHtml(projectName)).append("</title>\n");
+        html.append("<script src=\"").append(CYTOSCAPE_CDN).append("\"></script>\n");
+        html.append("<style>").append(css()).append("</style>\n");
+        html.append("</head>\n<body>\n");
+        html.append(sidebar(graph, projectName));
+        html.append("<div id=\"graph\"></div>\n");
+        html.append("<div id=\"tooltip\" class=\"tooltip\" hidden></div>\n");
+        html.append("<script>\nconst DATA = ").append(safe).append(";\n");
+        html.append("const NODE_DESCRIPTIONS = ").append(asJsObject(NODE_DESCRIPTIONS)).append(";\n");
+        html.append("const EDGE_DESCRIPTIONS = ").append(asJsObject(EDGE_DESCRIPTIONS)).append(";\n");
+        html.append(scriptBody());
+        html.append("\n</script>\n</body>\n</html>\n");
+        return html.toString();
+    }
+
+    // ---- JSON emission ----------------------------------------------------------------
+
+    private static void emitJson(ProjectGraph graph, StringBuilder out) {
+        out.append("{\n  \"nodes\": [");
+        boolean first = true;
+        for (Node n : graph.allNodes()) {
+            if (!first) out.append(',');
+            first = false;
+            out.append("\n    ");
+            emitNode(n, out);
+        }
+        out.append("\n  ],\n  \"edges\": [");
+        first = true;
+        int edgeSeq = 0;
+        for (Node n : graph.allNodes()) {
+            for (Edge e : graph.outgoing(n.id())) {
+                if (!first) out.append(',');
+                first = false;
+                out.append("\n    ");
+                emitEdge(e, edgeSeq++, out);
+            }
+        }
+        out.append("\n  ]\n}");
+    }
+
+    private static void emitNode(Node n, StringBuilder out) {
+        out.append("{\"data\":{");
+        out.append("\"id\":").append(jstr(n.id()));
+        out.append(",\"kind\":").append(jstr(nodeKindOf(n)));
+        out.append(",\"label\":").append(jstr(shortLabel(n)));
+        switch (n) {
+            case Node.Method m -> {
+                out.append(",\"fqn\":").append(jstr(m.fqn()));
+                out.append(",\"signature\":").append(jstr(m.signature()));
+                if (m.file() != null) out.append(",\"file\":").append(jstr(m.file()));
+                out.append(",\"line\":").append(m.lineStart());
+                out.append(",\"isTest\":").append(m.isTest());
+            }
+            case Node.Type t -> {
+                out.append(",\"fqn\":").append(jstr(t.fqn()));
+                if (t.file() != null) out.append(",\"file\":").append(jstr(t.file()));
+            }
+            case Node.Field f -> {
+                out.append(",\"name\":").append(jstr(f.name()));
+                out.append(",\"type\":").append(jstr(f.type()));
+                out.append(",\"owner\":").append(jstr(f.ownerTypeFqn()));
+            }
+            case Node.Parameter p -> {
+                out.append(",\"name\":").append(jstr(p.name()));
+                out.append(",\"type\":").append(jstr(p.type()));
+                out.append(",\"index\":").append(p.index());
+            }
+            case Node.CallSite cs -> {
+                out.append(",\"callee\":").append(jstr(cs.calleeFqn()));
+                if (cs.codeSnippet() != null && !cs.codeSnippet().isEmpty()) {
+                    out.append(",\"code\":").append(jstr(truncate(cs.codeSnippet(), 200)));
+                }
+                out.append(",\"line\":").append(cs.line());
+            }
+            case Node.Literal lit -> {
+                out.append(",\"value\":").append(jstr(truncate(lit.value(), 80)));
+                out.append(",\"line\":").append(lit.line());
+            }
+            case Node.Stmt s -> {
+                out.append(",\"stmtKind\":").append(jstr(String.valueOf(s.kind())));
+                if (s.codeSnippet() != null) {
+                    out.append(",\"code\":").append(jstr(truncate(s.codeSnippet(), 200)));
+                }
+                out.append(",\"line\":").append(s.line());
+            }
+        }
+        out.append("}}");
+    }
+
+    private static void emitEdge(Edge e, int seq, StringBuilder out) {
+        out.append("{\"data\":{");
+        out.append("\"id\":\"e").append(seq).append('"');
+        out.append(",\"source\":").append(jstr(e.fromId()));
+        out.append(",\"target\":").append(jstr(e.toId()));
+        out.append(",\"kind\":").append(jstr(edgeKindOf(e)));
+        out.append("}}");
+    }
+
+    private static String nodeKindOf(Node n) {
+        return switch (n) {
+            case Node.Method m -> m.isTest() ? "TestMethod" : "Method";
+            case Node.Type __ -> "Type";
+            case Node.Field __ -> "Field";
+            case Node.Parameter __ -> "Parameter";
+            case Node.CallSite __ -> "CallSite";
+            case Node.Literal __ -> "Literal";
+            case Node.Stmt __ -> "Stmt";
+        };
+    }
+
+    private static String edgeKindOf(Edge e) {
+        return switch (e) {
+            case Edge.Calls __ -> "Calls";
+            case Edge.AstContains __ -> "AstContains";
+            case Edge.Ddg __ -> "Ddg";
+            case Edge.Cdg __ -> "Cdg";
+            case Edge.Reads __ -> "Reads";
+            case Edge.Writes __ -> "Writes";
+            case Edge.RefType __ -> "RefType";
+            case Edge.Overrides __ -> "Overrides";
+        };
+    }
+
+    private static String shortLabel(Node n) {
+        return switch (n) {
+            case Node.Method m -> simpleNameOf(m.fqn()) + "()";
+            case Node.Type t -> simpleNameOf(t.fqn());
+            case Node.Field f -> f.name();
+            case Node.Parameter p -> p.name() + ":" + simpleNameOf(p.type());
+            case Node.CallSite cs -> truncate(
+                    cs.codeSnippet() != null && !cs.codeSnippet().isEmpty()
+                            ? cs.codeSnippet()
+                            : simpleNameOf(cs.calleeFqn()) + "(…)", 50);
+            case Node.Literal lit -> truncate(lit.value(), 30);
+            case Node.Stmt s -> truncate(s.codeSnippet(), 30);
+        };
+    }
+
+    private static String simpleNameOf(String fqn) {
+        if (fqn == null || fqn.isEmpty()) return "";
+        int dot = fqn.lastIndexOf('.');
+        return dot < 0 ? fqn : fqn.substring(dot + 1);
+    }
+
+    private static String truncate(String s, int max) {
+        if (s == null) return "";
+        String oneLine = s.replace('\n', ' ').replace('\r', ' ').trim();
+        return oneLine.length() <= max ? oneLine : oneLine.substring(0, max - 1) + "…";
+    }
+
+    // ---- Sidebar ----------------------------------------------------------------------
+
+    private static String sidebar(ProjectGraph graph, String projectName) {
+        int nodeCount = 0, edgeCount = 0;
+        Map<String, Integer> nodeCounts = new LinkedHashMap<>();
+        Map<String, Integer> edgeCounts = new LinkedHashMap<>();
+        for (Node nd : graph.allNodes()) {
+            nodeCount++;
+            nodeCounts.merge(nodeKindOf(nd), 1, Integer::sum);
+            for (Edge ed : graph.outgoing(nd.id())) {
+                edgeCount++;
+                edgeCounts.merge(edgeKindOf(ed), 1, Integer::sum);
+            }
+        }
+
+        StringBuilder s = new StringBuilder(8 * 1024);
+        s.append("<aside id=\"sidebar\">\n");
+        s.append("  <h1>CPG inspector</h1>\n");
+        s.append("  <p class=\"project\">").append(escapeHtml(projectName)).append("</p>\n");
+        s.append("  <p class=\"stats\">").append(nodeCount).append(" nodes · ").append(edgeCount).append(" edges</p>\n");
+
+        s.append("  <h2>Node types</h2>\n  <ul class=\"legend\">\n");
+        for (var entry : NODE_KINDS.entrySet()) {
+            String kind = entry.getKey();
+            NodeKindMeta meta = entry.getValue();
+            int count = nodeCounts.getOrDefault(kind, 0);
+            s.append("    <li title=\"").append(escapeHtml(meta.description)).append("\">")
+             .append("<span class=\"swatch swatch-node ").append(meta.cssClass).append("\"></span>")
+             .append("<span class=\"name\">").append(kind).append("</span>")
+             .append("<span class=\"count\">").append(count).append("</span></li>\n");
+        }
+        s.append("  </ul>\n");
+
+        s.append("  <h2>Edge types <span class=\"hint\">(click to toggle)</span></h2>\n  <ul class=\"legend edges\">\n");
+        for (var entry : EDGE_KINDS.entrySet()) {
+            String kind = entry.getKey();
+            EdgeKindMeta meta = entry.getValue();
+            int count = edgeCounts.getOrDefault(kind, 0);
+            s.append("    <li data-edge-kind=\"").append(kind).append("\" title=\"")
+             .append(escapeHtml(meta.description)).append("\">")
+             .append("<span class=\"swatch swatch-edge\" style=\"background:").append(meta.color).append(";\"></span>")
+             .append("<span class=\"name\">").append(kind).append("</span>")
+             .append("<span class=\"count\">").append(count).append("</span></li>\n");
+        }
+        s.append("  </ul>\n");
+
+        s.append("  <h2>Highlight chop <span class=\"hint\">(asserts → target)</span></h2>\n");
+        s.append("  <div class=\"chop-panel\">\n");
+        s.append("    <input id=\"chop-target\" list=\"chop-target-list\" type=\"search\" placeholder=\"Method FQN, e.g. toy.Counter.multiply\">\n");
+        s.append("    <datalist id=\"chop-target-list\"></datalist>\n");
+        s.append("    <div class=\"chop-buttons\">\n");
+        s.append("      <button id=\"chop-go\">Highlight</button>\n");
+        s.append("      <button id=\"chop-clear\">Clear</button>\n");
+        s.append("    </div>\n");
+        s.append("    <label class=\"chop-mode\" title=\"Off: dim non-chop elements (keep them visible, greyed). On: hide them completely from the canvas — much lighter to render for big graphs.\">")
+         .append("<input id=\"chop-isolate\" type=\"checkbox\"> Isolate (hide non-chop)</label>\n");
+        s.append("    <button id=\"chop-download\" class=\"chop-download\" disabled title=\"Download a human-readable .txt of every test→target chain in the current chop, with node and edge metadata.\">Download chains</button>\n");
+        s.append("    <p id=\"chop-summary\" class=\"chop-summary\">—</p>\n");
+        s.append("  </div>\n");
+
+        s.append("  <h2>Search</h2>\n");
+        s.append("  <input id=\"search\" type=\"search\" placeholder=\"Filter by name…\">\n");
+
+        s.append("  <h2>Selected</h2>\n");
+        s.append("  <pre id=\"details\">(hover or click a node)</pre>\n");
+        s.append("</aside>\n");
+        return s.toString();
+    }
+
+    // ---- Metadata ---------------------------------------------------------------------
+
+    private record NodeKindMeta(String cssClass, String description) {}
+    private record EdgeKindMeta(String color, String description) {}
+
+    private static Map<String, NodeKindMeta> nodeKinds() {
+        Map<String, NodeKindMeta> m = new LinkedHashMap<>();
+        m.put("Method", new NodeKindMeta("nk-method",
+                "A method definition. Body anchor for Parameters, CallSites, Literals; receives Calls (incoming) and emits AstContains (outgoing)."));
+        m.put("TestMethod", new NodeKindMeta("nk-test",
+                "A JUnit test method (@Test / @ParameterizedTest / @RepeatedTest)."));
+        m.put("Type", new NodeKindMeta("nk-type",
+                "A class, interface, enum or annotation declaration. Source/target of INHERITS_FROM (RefType) edges."));
+        m.put("Field", new NodeKindMeta("nk-field",
+                "A class member field. Source/target of Reads and Writes edges."));
+        m.put("Parameter", new NodeKindMeta("nk-param",
+                "A formal parameter of a method. AST child of the owner method; data-flow sink for arguments at every incoming call site."));
+        m.put("CallSite", new NodeKindMeta("nk-callsite",
+                "A call expression in source. Outgoing Calls edge points at the resolved callee Method; participates in Ddg/Cdg with surrounding code."));
+        m.put("Literal", new NodeKindMeta("nk-literal",
+                "A literal value in source (number, string, null, …). Typical Ddg source: flows into the call site or assignment that consumes the value."));
+        m.put("Stmt", new NodeKindMeta("nk-stmt",
+                "A statement: return / if / loop / try. AST child of the owner method, participates in Cdg."));
+        return m;
+    }
+
+    private static Map<String, EdgeKindMeta> edgeKinds() {
+        Map<String, EdgeKindMeta> m = new LinkedHashMap<>();
+        m.put("Calls", new EdgeKindMeta("#212121",
+                "Call edge: the source invokes the target method. In a faithful CPG the source is a CallSite."));
+        m.put("AstContains", new EdgeKindMeta("#9E9E9E",
+                "AST containment: the parent (a Method) syntactically contains the child (Parameter, Literal, CallSite, Stmt). Read as «source has child target»."));
+        m.put("Ddg", new EdgeKindMeta("#1565C0",
+                "Data dependence (reaching definition): the value defined at source is used at target. A literal argument feeding a call site is a textbook example."));
+        m.put("Cdg", new EdgeKindMeta("#EF6C00",
+                "Control dependence: the target executes only because of the outcome at the source (branch / exception / loop)."));
+        m.put("Reads", new EdgeKindMeta("#2E7D32",
+                "Field read: the source method reads the target field. Synthesised from <operator>.fieldAccess CALL nodes."));
+        m.put("Writes", new EdgeKindMeta("#C62828",
+                "Field write: the source method writes the target field. Synthesised from <operator>.assignment* and <operator>.{pre,post}{Increment,Decrement} CALL nodes."));
+        m.put("Overrides", new EdgeKindMeta("#000000",
+                "Override: the source method overrides the target (subclass → superclass / interface). Drives virtual dispatch resolution."));
+        m.put("RefType", new EdgeKindMeta("#6A1B9A",
+                "Type reference (INHERITS_FROM): the source TypeDecl extends or implements the target TypeDecl."));
+        return m;
+    }
+
+    // ---- CSS + JS ---------------------------------------------------------------------
+
+    private static String css() {
+        return """
+                * { box-sizing: border-box; }
+                html, body { height: 100%; margin: 0; font-family: -apple-system, "Helvetica Neue", Arial, sans-serif; color: #263238; }
+                body { display: flex; }
+                #sidebar { width: 320px; padding: 16px 18px; background: #FAFAFA; border-right: 1px solid #E0E0E0; overflow-y: auto; }
+                #sidebar h1 { font-size: 16px; margin: 0; }
+                #sidebar h2 { font-size: 12px; text-transform: uppercase; letter-spacing: 0.05em; color: #607D8B; margin: 18px 0 6px; }
+                #sidebar p.project { margin: 2px 0 6px; color: #455A64; font-size: 12px; font-family: ui-monospace, monospace; }
+                #sidebar p.stats { margin: 0 0 8px; color: #607D8B; font-size: 12px; }
+                #sidebar .hint { font-weight: normal; text-transform: none; letter-spacing: 0; color: #90A4AE; }
+                #sidebar ul.legend { list-style: none; padding: 0; margin: 0; }
+                #sidebar ul.legend li { display: flex; align-items: center; gap: 8px; padding: 4px 6px; border-radius: 4px; font-size: 13px; }
+                #sidebar ul.legend.edges li { cursor: pointer; user-select: none; }
+                #sidebar ul.legend.edges li.off { opacity: 0.35; }
+                #sidebar ul.legend li:hover { background: #ECEFF1; }
+                #sidebar ul.legend .name { flex: 1; }
+                #sidebar ul.legend .count { color: #90A4AE; font-size: 12px; }
+                .swatch { display: inline-block; width: 18px; height: 14px; border-radius: 3px; }
+                .swatch-node { border: 1px solid rgba(0,0,0,0.2); }
+                .swatch-edge { width: 22px; height: 4px; border-radius: 2px; }
+                .nk-method { background: #D1C4E9; } .nk-test { background: #FFD580; }
+                .nk-type { background: #C5CAE9; } .nk-field { background: #F8BBD0; }
+                .nk-param { background: #C8E6C9; } .nk-callsite { background: #FFF59D; }
+                .nk-literal { background: #FFE0B2; } .nk-stmt { background: #B2DFDB; }
+                #search, #chop-target { width: 100%; padding: 6px 8px; border: 1px solid #CFD8DC; border-radius: 4px; font-size: 13px; }
+                .chop-panel { display: flex; flex-direction: column; gap: 6px; }
+                .chop-buttons { display: flex; gap: 6px; }
+                .chop-buttons button { flex: 1; padding: 6px 10px; border: 1px solid #CFD8DC; background: white; border-radius: 4px; cursor: pointer; font-size: 12px; }
+                .chop-buttons button:hover { background: #ECEFF1; }
+                #chop-go { background: #FFD580; border-color: #FFB74D; }
+                .chop-mode { display: flex; align-items: center; gap: 6px; font-size: 12px; color: #455A64; cursor: pointer; user-select: none; }
+                .chop-mode input { margin: 0; }
+                .chop-download { padding: 6px 10px; border: 1px solid #CFD8DC; background: white; border-radius: 4px; cursor: pointer; font-size: 12px; }
+                .chop-download:hover:not(:disabled) { background: #ECEFF1; }
+                .chop-download:disabled { opacity: 0.4; cursor: not-allowed; }
+                .chop-summary { margin: 0; font-size: 12px; color: #607D8B; }
+                #details { background: white; border: 1px solid #ECEFF1; border-radius: 4px; padding: 8px; margin: 0; font-size: 11px; white-space: pre-wrap; word-break: break-word; max-height: 240px; overflow-y: auto; }
+                #graph { flex: 1; min-width: 0; height: 100vh; background: #FFFFFF; }
+                .tooltip { position: absolute; pointer-events: none; background: rgba(33,33,33,0.94); color: white; padding: 8px 10px; border-radius: 4px; font-size: 12px; max-width: 380px; z-index: 10; line-height: 1.45; }
+                .tooltip .k { color: #80DEEA; font-weight: 600; }
+                .tooltip .desc { color: #ECEFF1; margin: 4px 0 6px; padding: 4px 6px; background: rgba(255,255,255,0.06); border-left: 2px solid #80DEEA; border-radius: 2px; }
+                .tooltip i { color: #B0BEC5; font-style: italic; font-size: 11px; }
+                .tooltip .endpoints { margin-top: 4px; padding-top: 4px; border-top: 1px solid rgba(255,255,255,0.15); }
+                .tooltip .endpoints .role { display: inline-block; min-width: 36px; color: #B0BEC5; }
+                .tooltip .kgray { color: #B0BEC5; font-size: 10px; }
+                """;
+    }
+
+    private static String scriptBody() {
+        return """
+                const NODE_STYLE = {
+                  Method:     { shape:'round-rectangle', bg:'#D1C4E9', border:'#7E57C2' },
+                  TestMethod: { shape:'round-rectangle', bg:'#FFD580', border:'#E65100' },
+                  Type:       { shape:'hexagon',         bg:'#C5CAE9', border:'#3949AB' },
+                  Field:      { shape:'diamond',         bg:'#F8BBD0', border:'#AD1457' },
+                  Parameter:  { shape:'rhomboid',        bg:'#C8E6C9', border:'#2E7D32' },
+                  CallSite:   { shape:'rectangle',       bg:'#FFF59D', border:'#F9A825' },
+                  Literal:    { shape:'ellipse',         bg:'#FFE0B2', border:'#EF6C00' },
+                  Stmt:       { shape:'cut-rectangle',   bg:'#B2DFDB', border:'#00695C' }
+                };
+                const EDGE_STYLE = {
+                  Calls:       { color:'#212121', style:'solid',  width:2, label:'calls' },
+                  AstContains: { color:'#9E9E9E', style:'dotted', width:1, label:'',          arrowless:true },
+                  Ddg:         { color:'#1565C0', style:'solid',  width:2, label:'ddg' },
+                  Cdg:         { color:'#EF6C00', style:'dashed', width:2, label:'cdg' },
+                  Reads:       { color:'#2E7D32', style:'solid',  width:2, label:'reads' },
+                  Writes:      { color:'#C62828', style:'solid',  width:2, label:'writes' },
+                  Overrides:   { color:'#000000', style:'solid',  width:3, label:'overrides' },
+                  RefType:     { color:'#6A1B9A', style:'dashed', width:2, label:'refType' }
+                };
+
+                const style = [];
+                for (const [k, s] of Object.entries(NODE_STYLE)) {
+                  style.push({ selector: `node[kind = "${k}"]`,
+                    style: { 'shape': s.shape, 'background-color': s.bg, 'border-color': s.border, 'border-width': 1.5,
+                      'label': 'data(label)', 'font-size': 10, 'text-wrap': 'wrap', 'text-max-width': 140,
+                      'text-valign': 'center', 'text-halign': 'center', 'color': '#263238',
+                      'padding': '6px', 'width': 'label', 'height': 'label' }});
+                }
+                for (const [k, s] of Object.entries(EDGE_STYLE)) {
+                  style.push({ selector: `edge[kind = "${k}"]`,
+                    style: { 'line-color': s.color, 'line-style': s.style, 'width': s.width,
+                      'target-arrow-color': s.color, 'target-arrow-shape': s.arrowless ? 'none' : 'triangle',
+                      'curve-style': 'bezier', 'label': s.label, 'font-size': 8, 'color': s.color,
+                      'text-rotation': 'autorotate', 'text-background-color': 'white',
+                      'text-background-opacity': 0.9, 'text-background-padding': 1 }});
+                }
+                style.push({ selector: 'node:selected', style: { 'border-width': 3, 'border-color': '#FF5252' }});
+                style.push({ selector: '.dim',          style: { 'opacity': 0.08 }});
+                style.push({ selector: '.chop-hidden',  style: { 'display': 'none' }});
+                style.push({ selector: '.hidden',       style: { 'display': 'none' }});
+                style.push({ selector: 'node.chop',     style: { 'opacity': 1, 'border-width': 3, 'border-color': '#FF6F00' }});
+                style.push({ selector: 'edge.chop',     style: { 'opacity': 1, 'width': 3 }});
+                style.push({ selector: 'node.chop-target', style: { 'border-width': 5, 'border-color': '#B71C1C', 'background-color': '#FFCDD2' }});
+                style.push({ selector: 'node.chop-assert', style: { 'border-width': 4, 'border-color': '#F9A825', 'background-color': '#FFF59D' }});
+                style.push({ selector: 'node.chop-test',   style: { 'border-width': 4, 'border-color': '#E65100' }});
+                style.push({ selector: 'node.chop-anchor', style: { 'border-width': 3, 'border-color': '#1565C0' }});
+
+                const cy = cytoscape({
+                  container: document.getElementById('graph'),
+                  elements: DATA, style: style,
+                  layout: { name: 'cose', animate: false, idealEdgeLength: 90, nodeRepulsion: 6000, padding: 30 },
+                  wheelSensitivity: 0.2
+                });
+
+                function escape(s) {
+                  return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;')
+                    .replace(/>/g, '&gt;').replace(/\"/g, '&quot;');
+                }
+
+                const tip = document.getElementById('tooltip');
+                function showTip(html, evt) {
+                  tip.innerHTML = html;
+                  tip.style.left = (evt.originalEvent.clientX + 12) + 'px';
+                  tip.style.top  = (evt.originalEvent.clientY + 12) + 'px';
+                  tip.hidden = false;
+                }
+                function hideTip() { tip.hidden = true; }
+
+                function endpointSummary(id) {
+                  const d = cy.getElementById(id).data() || {};
+                  return `<b>${escape(d.label || id)}</b> <span class="kgray">(${escape(d.kind || '?')})</span>`;
+                }
+                cy.on('mouseover', 'node', evt => {
+                  const d = evt.target.data();
+                  const desc = NODE_DESCRIPTIONS[d.kind] || '';
+                  let html = `<div><span class="k">${d.kind}</span> ${escape(d.label)}</div>`;
+                  if (desc) html += `<div class="desc">${escape(desc)}</div>`;
+                  if (d.fqn)        html += `<div><i>fqn</i>: ${escape(d.fqn)}</div>`;
+                  if (d.signature)  html += `<div><i>signature</i>: ${escape(d.signature)}</div>`;
+                  if (d.callee)     html += `<div><i>callee</i>: ${escape(d.callee)}</div>`;
+                  if (d.code)       html += `<div><i>code</i>: ${escape(d.code)}</div>`;
+                  if (d.value !== undefined) html += `<div><i>value</i>: ${escape(d.value)}</div>`;
+                  if (d.type)       html += `<div><i>type</i>: ${escape(d.type)}</div>`;
+                  if (d.owner)      html += `<div><i>owner</i>: ${escape(d.owner)}</div>`;
+                  if (d.file)       html += `<div><i>at</i>: ${escape(d.file)}:${d.line}</div>`;
+                  showTip(html, evt);
+                });
+                cy.on('mouseover', 'edge', evt => {
+                  const d = evt.target.data();
+                  const desc = EDGE_DESCRIPTIONS[d.kind] || '';
+                  let html = `<div><span class="k">${d.kind}</span></div>`;
+                  if (desc) html += `<div class="desc">${escape(desc)}</div>`;
+                  html += `<div class="endpoints">`
+                       +  `<div><span class="role">from</span> ${endpointSummary(d.source)}</div>`
+                       +  `<div><span class="role">to</span>&nbsp;&nbsp; ${endpointSummary(d.target)}</div></div>`;
+                  showTip(html, evt);
+                });
+                cy.on('mouseout', 'node, edge', hideTip);
+                cy.on('drag pan zoom', hideTip);
+
+                const details = document.getElementById('details');
+                cy.on('tap', 'node, edge', evt => { details.textContent = JSON.stringify(evt.target.data(), null, 2); });
+                cy.on('tap', evt => { if (evt.target === cy) details.textContent = '(hover or click a node)'; });
+
+                document.querySelectorAll('#sidebar li[data-edge-kind]').forEach(li => {
+                  li.addEventListener('click', () => {
+                    li.classList.toggle('off');
+                    cy.edges(`[kind = "${li.dataset.edgeKind}"]`).toggleClass('hidden');
+                  });
+                });
+
+                document.getElementById('search').addEventListener('input', evt => {
+                  const q = evt.target.value.trim().toLowerCase();
+                  if (!q) { cy.elements().removeClass('dim'); return; }
+                  cy.batch(() => {
+                    cy.elements().addClass('dim');
+                    const hits = cy.nodes().filter(n => {
+                      const d = n.data();
+                      const hay = [d.label, d.fqn, d.callee, d.value, d.name].filter(Boolean).join(' ').toLowerCase();
+                      return hay.includes(q);
+                    });
+                    hits.removeClass('dim');
+                    hits.connectedEdges().removeClass('dim');
+                  });
+                });
+
+                // ---- Chop computation -----------------------------------------------------
+                const CHOP_TRAVERSAL = new Set(['Calls','Ddg','AstContains','Cdg','Reads']);
+                const ASSERT_PKGS = ['org.junit.','org.assertj.','org.hamcrest.MatcherAssert.'];
+                const ASSERT_NAMES = ['assert','fail','verify','expect','then'];
+                const adjOut = new Map(), adjIn = new Map();
+                cy.edges().forEach(e => {
+                  const d = e.data();
+                  if (!CHOP_TRAVERSAL.has(d.kind)) return;
+                  if (!adjOut.has(d.source)) adjOut.set(d.source, []);
+                  adjOut.get(d.source).push(d);
+                  if (!adjIn.has(d.target)) adjIn.set(d.target, []);
+                  adjIn.get(d.target).push(d);
+                });
+                function simpleName(s) { if (!s) return ''; const i = s.lastIndexOf('.'); return i < 0 ? s : s.substring(i + 1); }
+                function isAssertLike(csData) {
+                  const fqn = csData.callee || ''; if (!fqn) return false;
+                  const simple = simpleName(fqn);
+                  const nameMatch = ASSERT_NAMES.some(p => simple.startsWith(p));
+                  if (!nameMatch) return false;
+                  return ASSERT_PKGS.some(p => fqn.startsWith(p)) || true; // tolerate unresolved class-path
+                }
+                function bfs(seeds, direction, maxDepth, maxNodes) {
+                  const visited = new Set(seeds);
+                  const queue = seeds.map(id => [id, 0]);
+                  const adj = direction === 'out' ? adjOut : adjIn;
+                  let truncated = false;
+                  while (queue.length && !truncated) {
+                    const [id, d] = queue.shift();
+                    if (d >= maxDepth) continue;
+                    const nodeData = cy.getElementById(id).data();
+                    if (nodeData && (nodeData.fqn || '').match(/^(java|javax|sun|jdk|kotlin|scala)\\./)) continue;
+                    for (const e of (adj.get(id) || [])) {
+                      const other = direction === 'out' ? e.target : e.source;
+                      if (visited.has(other)) continue;
+                      if (visited.size >= maxNodes) { truncated = true; break; }
+                      visited.add(other);
+                      queue.push([other, d + 1]);
+                    }
+                  }
+                  return { visited, truncated };
+                }
+                function computeChop(targetId, opts) {
+                  opts = opts || {}; const maxDepth = opts.maxDepth || 12; const maxNodes = opts.maxNodes || 800;
+                  const assertsByTest = new Map();
+                  cy.nodes('[kind = "TestMethod"]').forEach(tm => {
+                    const tmId = tm.id();
+                    const out = adjOut.get(tmId) || [];
+                    const asserts = [];
+                    for (const e of out) {
+                      if (e.kind !== 'AstContains') continue;
+                      const child = cy.getElementById(e.target).data();
+                      if (child && child.kind === 'CallSite' && isAssertLike(child)) asserts.push(child.id);
+                    }
+                    if (asserts.length) assertsByTest.set(tmId, asserts);
+                  });
+                  const back = bfs([targetId], 'in', maxDepth, maxNodes);
+                  const forward = new Set();
+                  for (const tmId of assertsByTest.keys()) {
+                    bfs([tmId], 'out', maxDepth, maxNodes).visited.forEach(id => forward.add(id));
+                  }
+                  const chop = new Set();
+                  back.visited.forEach(id => { if (forward.has(id)) chop.add(id); });
+                  chop.add(targetId);
+                  const testsInChop = []; const assertSites = [];
+                  for (const [tmId, csList] of assertsByTest.entries()) {
+                    if (chop.has(tmId)) { testsInChop.push(tmId); csList.forEach(cs => { chop.add(cs); assertSites.push(cs); }); }
+                  }
+                  if (testsInChop.length === 0) return null;
+                  // Anchor Method→Method Calls through real CallSites.
+                  const closed = new Set(chop);
+                  const usedAnchors = new Set(); const anchored = new Set();
+                  for (const callerId of Array.from(closed)) {
+                    const callerData = cy.getElementById(callerId).data();
+                    if (!callerData || (callerData.kind !== 'Method' && callerData.kind !== 'TestMethod')) continue;
+                    for (const e of (adjOut.get(callerId) || [])) {
+                      if (e.kind !== 'Calls') continue;
+                      if (!closed.has(e.target)) continue;
+                      const calleeData = cy.getElementById(e.target).data();
+                      if (!calleeData || (calleeData.kind !== 'Method' && calleeData.kind !== 'TestMethod')) continue;
+                      const calleeFqn = calleeData.fqn; const calleeSimple = simpleName(calleeFqn);
+                      let anchor = null;
+                      for (const ee of (adjOut.get(callerId) || [])) {
+                        if (ee.kind !== 'AstContains') continue;
+                        const child = cy.getElementById(ee.target).data();
+                        if (!child || child.kind !== 'CallSite') continue;
+                        if (usedAnchors.has(child.id)) continue;
+                        const csFqn = child.callee || '';
+                        if (csFqn === calleeFqn || simpleName(csFqn) === calleeSimple) { anchor = child.id; break; }
+                      }
+                      if (anchor) { usedAnchors.add(anchor); closed.add(anchor); anchored.add(anchor); }
+                    }
+                  }
+                  // AST closure: Parameters + Literals via Ddg.
+                  for (const id of Array.from(closed)) {
+                    const n = cy.getElementById(id).data();
+                    if (!n || (n.kind !== 'Method' && n.kind !== 'TestMethod')) continue;
+                    for (const e of (adjOut.get(id) || [])) {
+                      if (e.kind !== 'AstContains') continue;
+                      const child = cy.getElementById(e.target).data();
+                      if (!child) continue;
+                      if (child.kind === 'Parameter') closed.add(child.id);
+                      else if (child.kind === 'Literal') {
+                        const outs = adjOut.get(child.id) || [];
+                        if (outs.some(ee => ee.kind === 'Ddg' && closed.has(ee.target))) closed.add(child.id);
+                      }
+                    }
+                  }
+                  return { nodes: closed, target: targetId, tests: testsInChop,
+                           asserts: new Set(assertSites), anchors: anchored, truncated: back.truncated };
+                }
+                function applyChop(chop) {
+                  cy.batch(() => {
+                    cy.elements().removeClass('dim chop chop-target chop-assert chop-test chop-anchor chop-hidden');
+                    if (!chop) return;
+                    const isolate = document.getElementById('chop-isolate').checked;
+                    // Mark every element as either inside the chop or outside.
+                    cy.elements().addClass('dim');
+                    chop.nodes.forEach(id => cy.getElementById(id).removeClass('dim').addClass('chop'));
+                    cy.getElementById(chop.target).removeClass('dim').addClass('chop-target');
+                    chop.tests.forEach(id => cy.getElementById(id).addClass('chop-test'));
+                    chop.asserts.forEach(id => cy.getElementById(id).addClass('chop-assert'));
+                    chop.anchors.forEach(id => cy.getElementById(id).addClass('chop-anchor'));
+                    cy.edges().forEach(e => {
+                      const d = e.data();
+                      if (chop.nodes.has(d.source) && chop.nodes.has(d.target)) {
+                        e.removeClass('dim').addClass('chop');
+                      }
+                    });
+                    // Isolate mode: hide everything that is still dim (= not in chop).
+                    if (isolate) {
+                      cy.elements('.dim').addClass('chop-hidden');
+                    }
+                  });
+                }
+                let savedPositions = null;
+                function saveCurrentPositions() {
+                  savedPositions = new Map();
+                  cy.nodes().forEach(n => savedPositions.set(n.id(), { x: n.position('x'), y: n.position('y') }));
+                }
+                function restoreSavedPositions() {
+                  if (!savedPositions) return;
+                  cy.batch(() => savedPositions.forEach((p, id) => { const n = cy.getElementById(id); if (n.length) n.position(p); }));
+                }
+                function relayoutChop(chop) {
+                  if (!chop) return;
+                  const Y_SP = 220, X_M = 360, X_C = 140;
+                  const depth = new Map(); depth.set(chop.target, 0);
+                  const q = [chop.target];
+                  while (q.length) {
+                    const id = q.shift(); const d = depth.get(id);
+                    for (const e of (adjIn.get(id) || [])) {
+                      if (e.kind !== 'Calls') continue;
+                      if (!chop.nodes.has(e.source)) continue;
+                      const k = (cy.getElementById(e.source).data() || {}).kind;
+                      if (k !== 'Method' && k !== 'TestMethod') continue;
+                      if (depth.has(e.source)) continue;
+                      depth.set(e.source, d + 1); q.push(e.source);
+                    }
+                  }
+                  let maxD = 0; depth.forEach(d => { if (d > maxD) maxD = d; });
+                  chop.tests.forEach(id => { if (!depth.has(id)) { depth.set(id, maxD + 1); maxD = Math.max(maxD, maxD + 1); } });
+                  const ASSERT_Y = (maxD + 2) * Y_SP;
+                  const methodsAtRow = new Map();
+                  depth.forEach((d, id) => { if (!chop.nodes.has(id)) return;
+                    if (!methodsAtRow.has(d)) methodsAtRow.set(d, []); methodsAtRow.get(d).push(id); });
+                  const childrenByParent = new Map();
+                  for (const id of chop.nodes) {
+                    if (depth.has(id)) continue;
+                    for (const e of (adjIn.get(id) || [])) {
+                      if (e.kind !== 'AstContains') continue;
+                      if (!depth.has(e.source)) continue;
+                      if (!childrenByParent.has(e.source)) childrenByParent.set(e.source, []);
+                      childrenByParent.get(e.source).push(id); break;
+                    }
+                  }
+                  const positions = new Map();
+                  methodsAtRow.forEach((methods, d) => {
+                    const y = d * Y_SP; const total = (methods.length - 1) * X_M;
+                    methods.forEach((m, i) => positions.set(m, { x: -total / 2 + i * X_M, y }));
+                  });
+                  childrenByParent.forEach((children, p) => {
+                    const parent = positions.get(p); if (!parent) return;
+                    const asserts = children.filter(c => chop.asserts.has(c));
+                    const others  = children.filter(c => !chop.asserts.has(c));
+                    others.forEach((c, i) => positions.set(c, { x: parent.x + (i + 1) * X_C, y: parent.y }));
+                    asserts.forEach((c, i) => positions.set(c, { x: parent.x + (i - (asserts.length - 1) / 2) * X_C, y: ASSERT_Y }));
+                  });
+                  let bx = 0;
+                  chop.asserts.forEach(a => { if (!positions.has(a)) { positions.set(a, { x: bx, y: ASSERT_Y }); bx += X_C; } });
+                  cy.batch(() => positions.forEach((p, id) => { const n = cy.getElementById(id); if (n.length) n.position(p); }));
+                  cy.fit(cy.elements('.chop'), 60);
+                }
+
+                const chopList = document.getElementById('chop-target-list');
+                cy.nodes('[kind = "Method"], [kind = "TestMethod"]').forEach(n => {
+                  const fqn = n.data().fqn; if (!fqn) return;
+                  const opt = document.createElement('option'); opt.value = fqn; chopList.appendChild(opt);
+                });
+                const chopSummary = document.getElementById('chop-summary');
+                const downloadBtn = document.getElementById('chop-download');
+                const isolateCb = document.getElementById('chop-isolate');
+                let currentChop = null;
+                function refreshChopState(chop) {
+                  currentChop = chop;
+                  downloadBtn.disabled = !chop;
+                }
+                document.getElementById('chop-go').addEventListener('click', () => {
+                  const fqn = document.getElementById('chop-target').value.trim();
+                  if (!fqn) { chopSummary.textContent = 'Pick a method first.'; return; }
+                  let nodes = cy.nodes().filter(n => n.data().fqn === fqn);
+                  if (nodes.length === 0) {
+                    const simp = fqn.toLowerCase();
+                    nodes = cy.nodes().filter(n => (n.data().fqn || '').toLowerCase().endsWith(simp));
+                  }
+                  if (nodes.length === 0) { chopSummary.textContent = 'No method matched.'; applyChop(null); refreshChopState(null); return; }
+                  const target = nodes[0];
+                  const chop = computeChop(target.id());
+                  if (!chop) { chopSummary.textContent = 'No test asserts reach this method.'; applyChop(null); refreshChopState(null); return; }
+                  if (!savedPositions) saveCurrentPositions();
+                  applyChop(chop); relayoutChop(chop);
+                  refreshChopState(chop);
+                  chopSummary.textContent = `${chop.nodes.size} nodes · ${chop.tests.length} test(s) · ${chop.asserts.size} assert site(s)${chop.truncated ? ' (truncated)' : ''}`;
+                });
+                document.getElementById('chop-clear').addEventListener('click', () => {
+                  applyChop(null); restoreSavedPositions(); cy.fit(cy.elements(), 30);
+                  refreshChopState(null);
+                  chopSummary.textContent = '—'; document.getElementById('chop-target').value = '';
+                });
+                // Toggle isolate ↔ dim mode without recomputing the chop.
+                isolateCb.addEventListener('change', () => { if (currentChop) applyChop(currentChop); });
+                // Download chains as human-readable text.
+                downloadBtn.addEventListener('click', () => {
+                  if (!currentChop) return;
+                  const text = renderChainsText(currentChop);
+                  const targetData = cy.getElementById(currentChop.target).data();
+                  const fqn = targetData.fqn || 'target';
+                  const safe = fqn.replace(/[^A-Za-z0-9_.-]+/g, '_');
+                  const blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
+                  const a = document.createElement('a');
+                  a.href = URL.createObjectURL(blob);
+                  a.download = 'chains-' + safe + '.txt';
+                  document.body.appendChild(a); a.click();
+                  setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 0);
+                });
+
+                // ---- Chain enumeration & rendering ----------------------------------------
+                /**
+                 * Enumerate every simple path test → ... → target inside the chop, walking
+                 * `Calls` edges restricted to chop.nodes.  For each step we attach the call
+                 * site (an AstContains child of the caller whose callee matches the callee
+                 * FQN) so the reader can locate the call in source.
+                 */
+                function enumerateChains(chop) {
+                  const callsOut = new Map(); // methodId -> [{ calleeId, edge }]
+                  cy.edges('[kind = "Calls"]').forEach(e => {
+                    const d = e.data();
+                    if (!chop.nodes.has(d.source) || !chop.nodes.has(d.target)) return;
+                    if (!callsOut.has(d.source)) callsOut.set(d.source, []);
+                    callsOut.get(d.source).push({ calleeId: d.target, edge: d });
+                  });
+                  const chains = [];
+                  const MAX_DEPTH = 25; const MAX_CHAINS = 5000;
+                  for (const testId of chop.tests) {
+                    const stack = [{ id: testId, path: [], onPath: new Set([testId]) }];
+                    while (stack.length && chains.length < MAX_CHAINS) {
+                      const cur = stack.pop();
+                      if (cur.id === chop.target && cur.path.length > 0) {
+                        chains.push({ testId, steps: cur.path });
+                        continue;
+                      }
+                      if (cur.path.length >= MAX_DEPTH) continue;
+                      for (const { calleeId, edge } of (callsOut.get(cur.id) || [])) {
+                        if (cur.onPath.has(calleeId)) continue;
+                        const nextOnPath = new Set(cur.onPath); nextOnPath.add(calleeId);
+                        stack.push({ id: calleeId, path: cur.path.concat([{ callerId: cur.id, calleeId, edge }]), onPath: nextOnPath });
+                      }
+                    }
+                    if (chains.length >= MAX_CHAINS) break;
+                  }
+                  chains.sort((a, b) => a.steps.length - b.steps.length);
+                  return chains;
+                }
+                function findCallSite(callerId, calleeId) {
+                  const calleeData = cy.getElementById(calleeId).data();
+                  if (!calleeData) return null;
+                  const calleeFqn = calleeData.fqn || '';
+                  const calleeSimple = simpleName(calleeFqn);
+                  for (const e of (adjOut.get(callerId) || [])) {
+                    if (e.kind !== 'AstContains') continue;
+                    const child = cy.getElementById(e.target).data();
+                    if (!child || child.kind !== 'CallSite') continue;
+                    const csFqn = child.callee || '';
+                    if (csFqn === calleeFqn || simpleName(csFqn) === calleeSimple) return child;
+                  }
+                  return null;
+                }
+                function nodeDescriptor(d) {
+                  if (!d) return '<unknown>';
+                  const parts = [d.fqn || d.label || d.id];
+                  if (d.file) parts.push(d.file + (d.line && d.line > 0 ? ':' + d.line : ''));
+                  if (d.signature) parts.push(d.signature);
+                  return parts.join('  |  ');
+                }
+                function renderChainsText(chop) {
+                  const chains = enumerateChains(chop);
+                  const targetData = cy.getElementById(chop.target).data();
+                  const lines = [];
+                  lines.push('═══ Chop: ' + (targetData.fqn || targetData.label) + ' ═══');
+                  lines.push('Target node:');
+                  lines.push('  kind:      ' + targetData.kind);
+                  lines.push('  fqn:       ' + (targetData.fqn || '-'));
+                  if (targetData.signature) lines.push('  signature: ' + targetData.signature);
+                  if (targetData.file)      lines.push('  file:      ' + targetData.file + (targetData.line > 0 ? ':' + targetData.line : ''));
+                  lines.push('');
+                  lines.push('Chop scope: ' + chop.nodes.size + ' nodes · '
+                          + chop.tests.length + ' test(s) · ' + chop.asserts.size + ' assert site(s)'
+                          + (chop.truncated ? ' (truncated)' : ''));
+                  lines.push('Chains found: ' + chains.length);
+                  lines.push('');
+                  if (chains.length === 0) {
+                    lines.push('(no Calls-path from any test reaches the target inside the chop scope)');
+                    return lines.join('\\n');
+                  }
+                  chains.forEach((c, i) => {
+                    const testData = cy.getElementById(c.testId).data();
+                    lines.push('────────────────────────────────────────────────────────────────');
+                    lines.push('[Chain ' + (i + 1) + ']  depth=' + c.steps.length);
+                    lines.push('  Test:  ' + nodeDescriptor(testData));
+                    c.steps.forEach((step, j) => {
+                      const callerData = cy.getElementById(step.callerId).data();
+                      const calleeData = cy.getElementById(step.calleeId).data();
+                      const arrow = step.edge.viaVirtual ? ' ↳ (virtual) ' : ' → ';
+                      lines.push('  step ' + (j + 1) + ': ' + (callerData.fqn || callerData.label));
+                      lines.push('       ' + arrow + (calleeData.fqn || calleeData.label));
+                      const cs = findCallSite(step.callerId, step.calleeId);
+                      if (cs) {
+                        const at = (cs.line > 0 ? '  (line ' + cs.line + ')' : '');
+                        const code = cs.code ? '  `' + cs.code.replace(/\\s+/g, ' ').trim() + '`' : '';
+                        lines.push('       call site:' + code + at);
+                      }
+                    });
+                    lines.push('  Target reached: ' + nodeDescriptor(targetData));
+                  });
+                  lines.push('────────────────────────────────────────────────────────────────');
+                  // Asserts in scope (sites where tests verify behavior).
+                  if (chop.asserts && chop.asserts.size > 0) {
+                    lines.push('');
+                    lines.push('Assert sites in chop (' + chop.asserts.size + '):');
+                    chop.asserts.forEach(id => {
+                      const d = cy.getElementById(id).data();
+                      if (!d) return;
+                      const at = (d.line > 0 ? ' (line ' + d.line + ')' : '');
+                      lines.push('  - ' + (d.callee || d.label) + at
+                              + (d.code ? '  `' + d.code.replace(/\\s+/g, ' ').trim() + '`' : ''));
+                    });
+                  }
+                  return lines.join('\\n');
+                }
+                """;
+    }
+
+    // ---- Escaping ---------------------------------------------------------------------
+
+    private static <T> Map<String, String> descriptions(Map<String, T> meta, java.util.function.Function<T, String> get) {
+        Map<String, String> out = new LinkedHashMap<>();
+        for (var e : meta.entrySet()) out.put(e.getKey(), get.apply(e.getValue()));
+        return out;
+    }
+
+    private static String asJsObject(Map<String, String> map) {
+        StringBuilder sb = new StringBuilder().append('{');
+        boolean first = true;
+        for (var e : map.entrySet()) {
+            if (!first) sb.append(',');
+            first = false;
+            sb.append(jstr(e.getKey())).append(':').append(jstr(e.getValue()));
+        }
+        return sb.append('}').toString();
+    }
+
+    private static String jstr(String s) {
+        if (s == null) return "null";
+        StringBuilder sb = new StringBuilder(s.length() + 8).append('"');
+        for (int i = 0; i < s.length(); i++) {
+            char c = s.charAt(i);
+            switch (c) {
+                case '"' -> sb.append("\\\"");
+                case '\\' -> sb.append("\\\\");
+                case '\n' -> sb.append("\\n");
+                case '\r' -> sb.append("\\r");
+                case '\t' -> sb.append("\\t");
+                default -> { if (c < 0x20) sb.append(String.format(Locale.ROOT, "\\u%04x", (int) c)); else sb.append(c); }
+            }
+        }
+        return sb.append('"').toString();
+    }
+
+    private static String escapeHtml(String s) {
+        if (s == null) return "";
+        StringBuilder sb = new StringBuilder(s.length());
+        for (int i = 0; i < s.length(); i++) {
+            char c = s.charAt(i);
+            switch (c) {
+                case '&' -> sb.append("&amp;");
+                case '<' -> sb.append("&lt;");
+                case '>' -> sb.append("&gt;");
+                case '"' -> sb.append("&quot;");
+                case '\'' -> sb.append("&#39;");
+                default -> sb.append(c);
+            }
+        }
+        return sb.toString();
+    }
+}
