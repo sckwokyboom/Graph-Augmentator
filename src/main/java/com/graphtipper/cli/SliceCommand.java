@@ -63,6 +63,23 @@ public final class SliceCommand implements Callable<Integer> {
             description = "Disable Tier 2 static slicer; emit v2.0-compatible artifacts")
     boolean noSlice = false;
 
+    @Option(names = "--prune-by-coverage",
+            description = "Path to JaCoCo XML report. Snippet lines not covered by reaching tests "
+                    + "are collapsed to `// … unexecuted by tests`. Target method's own range "
+                    + "is excluded from the coverage signal to prevent leakage.")
+    Path pruneByCoverage;
+
+    @Option(names = "--katz-rank",
+            description = "Rank path clusters by max Katz centrality on the chop method graph. "
+                    + "High-centrality clusters get priority under the token budget. "
+                    + "Currently unsupported pending programmatic ChopPipeline extraction.")
+    boolean katzRank;
+
+    @Option(names = "--bare",
+            description = "Emit only the target signature + javadoc (no chains, no local context). "
+                    + "Used by the no-context arm of the eval harness.")
+    boolean bare;
+
     @Override
     public Integer call() {
         try {
@@ -195,9 +212,25 @@ public final class SliceCommand implements Callable<Integer> {
             var unlimitedBudget = new TokenBudget(Integer.MAX_VALUE);
             new BudgetPlanner(unlimitedBudget).planNoEvict(fullArtifact);
 
+            if (katzRank) {
+                throw new UnsupportedOperationException(
+                        "--katz-rank requires programmatic ChopPipeline access; tracked as followup. "
+                        + "See plan §Followups in docs/superpowers/plans/2026-05-22-augmentation-eval-harness-plan.md");
+            }
+
+            RenderOptions opts = RenderOptions.defaults().withBare(bare);
+            if (pruneByCoverage != null) {
+                var report = com.graphtipper.slice.JacocoExecReport.fromXml(pruneByCoverage);
+                String tgtPkgFile = packageQualifiedSourcePath(targetMethod);
+                var pruner = com.graphtipper.slice.SnippetCoveragePruner.of(
+                        report, tgtPkgFile,
+                        targetMethod.lineStart(), targetMethod.lineEnd());
+                opts = opts.withPruner(pruner);
+            }
+
             String projectName = project.getFileName().toString();
-            String budgetMd = new MarkdownRenderer().render(budgetArtifact, budget, projectSrcHash, projectName);
-            String fullMd = new MarkdownRenderer().render(fullArtifact, unlimitedBudget, projectSrcHash, projectName);
+            String budgetMd = new MarkdownRenderer(opts).render(budgetArtifact, budget, projectSrcHash, projectName);
+            String fullMd = new MarkdownRenderer(opts).render(fullArtifact, unlimitedBudget, projectSrcHash, projectName);
             String graphJson = new GraphJsonRenderer().render(graphArtifact, g, projectSrcHash, projectName);
             String legacyJson = new JsonRenderer().render(budgetArtifact, budget);
 
@@ -267,6 +300,20 @@ public final class SliceCommand implements Callable<Integer> {
         } catch (Exception e) {
             throw new RuntimeException(e);
         }
+    }
+
+    /**
+     * Converts {@link Node.Method#file()} (project-relative, e.g. "src/main/java/com/example/Foo.java")
+     * to JaCoCo's package-qualified source path key (e.g. "com/example/Foo.java").
+     */
+    private static String packageQualifiedSourcePath(Node.Method m) {
+        String f = m.file();
+        if (f == null) return "";
+        int idx = f.indexOf("src/main/java/");
+        if (idx >= 0) return f.substring(idx + "src/main/java/".length());
+        idx = f.indexOf("src/test/java/");
+        if (idx >= 0) return f.substring(idx + "src/test/java/".length());
+        return f; // last resort — pass through and let JaCoCo lookup miss naturally
     }
 
     private static void writeAtomic(Path target, String content) throws java.io.IOException {
