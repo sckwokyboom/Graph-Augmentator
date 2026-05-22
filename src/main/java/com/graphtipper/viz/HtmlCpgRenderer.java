@@ -248,6 +248,7 @@ public final class HtmlCpgRenderer {
          .append("<input id=\"chop-isolate\" type=\"checkbox\"> Isolate (hide non-chop)</label>\n");
         s.append("    <button id=\"chop-download\" class=\"chop-download\" disabled title=\"Human-readable .txt of every test→target chain in the current chop, with node and edge metadata. Good for eyeballing against source code.\">Download chains (.txt)</button>\n");
         s.append("    <button id=\"chop-download-llm\" class=\"chop-download\" disabled title=\"GraphRAG-style markdown augmentation: typed entities (M/T/C/A/L/F refs), call paths, data flow, field accesses, overrides. Drop into an LLM prompt as code-slice context.\">Download LLM context (.md)</button>\n");
+        s.append("    <button id=\"chop-download-json\" class=\"chop-download\" disabled title=\"Same slice in Microsoft GraphRAG-style JSON: entities[] with type/title/description/attributes + relationships[] with source/target/type. Machine-readable; ideal as input to RAG pipelines, function-calling tools, or programmatic LLM workflows.\">Download GraphRAG JSON (.json)</button>\n");
         s.append("    <p id=\"chop-summary\" class=\"chop-summary\">—</p>\n");
         s.append("  </div>\n");
 
@@ -735,12 +736,14 @@ public final class HtmlCpgRenderer {
                 const chopSummary = document.getElementById('chop-summary');
                 const downloadBtn = document.getElementById('chop-download');
                 const downloadLlmBtn = document.getElementById('chop-download-llm');
+                const downloadJsonBtn = document.getElementById('chop-download-json');
                 const isolateCb = document.getElementById('chop-isolate');
                 let currentChop = null;
                 function refreshChopState(chop) {
                   currentChop = chop;
                   downloadBtn.disabled = !chop;
                   downloadLlmBtn.disabled = !chop;
+                  downloadJsonBtn.disabled = !chop;
                 }
                 document.getElementById('chop-go').addEventListener('click', () => {
                   const fqn = document.getElementById('chop-target').value.trim();
@@ -815,6 +818,10 @@ public final class HtmlCpgRenderer {
                 downloadLlmBtn.addEventListener('click', () => {
                   if (!currentChop) return;
                   triggerDownload(renderLlmAugmentation(currentChop), 'slice', 'md', 'text/markdown');
+                });
+                downloadJsonBtn.addEventListener('click', () => {
+                  if (!currentChop) return;
+                  triggerDownload(renderGraphRagJson(currentChop), 'slice', 'json', 'application/json');
                 });
 
                 // ---- Chain enumeration & rendering ----------------------------------------
@@ -1254,6 +1261,273 @@ public final class HtmlCpgRenderer {
                   md.push('');
 
                   return md.join('\\n');
+                }
+
+                // ─────────────────────────────────────────────────────────────────
+                // GraphRAG JSON export.
+                //
+                // Microsoft's GraphRAG (Edge et al. 2024) stores its knowledge graph
+                // as two tables: `entities` (id, type, title, description, attributes)
+                // and `relationships` (source, target, type, description). At query
+                // time both are loaded and serialised into the LLM prompt — sometimes
+                // as raw JSON when the consumer is a tool-using agent, sometimes as
+                // formatted markdown for plain chat models.
+                //
+                // We follow the same schema so this slice is interoperable with any
+                // pipeline that already speaks GraphRAG. Note: real LLMs were NOT
+                // trained on a single canonical "GraphRAG format" — they were trained
+                // on general JSON/markdown — but this schema is the closest thing to
+                // a community standard for graph-RAG augmentation and is widely
+                // recognised by retrieval / agent frameworks.
+                // ─────────────────────────────────────────────────────────────────
+                function renderGraphRagJson(chop) {
+                  const target = cy.getElementById(chop.target).data();
+                  const chains = enumerateChains(chop);
+
+                  // ── 1. Index entities + refs ─────────────────────────────────────
+                  const idToRef = new Map();
+                  const ordered = []; // for stable output order
+                  const counters = { T: 0, M: 0, C: 0, A: 0, L: 0, F: 0, Y: 0 };
+                  function take(prefix, id, data) {
+                    counters[prefix]++;
+                    const ref = prefix + counters[prefix];
+                    idToRef.set(id, ref);
+                    ordered.push({ ref, id, data });
+                  }
+                  // First the target method (so it's M1), then the rest.
+                  if (target && target.kind === 'Method') take('M', chop.target, target);
+                  chop.nodes.forEach(id => {
+                    if (idToRef.has(id)) return;
+                    const d = cy.getElementById(id).data();
+                    if (!d) return;
+                    if (d.kind === 'TestMethod')     take('T', id, d);
+                    else if (d.kind === 'Method')    take('M', id, d);
+                    else if (d.kind === 'CallSite')  take(chop.asserts.has(id) ? 'A' : 'C', id, d);
+                    else if (d.kind === 'Literal')   take('L', id, d);
+                    else if (d.kind === 'Field')     take('F', id, d);
+                    else if (d.kind === 'Type')      take('Y', id, d);
+                    // Parameter / Stmt deliberately skipped (noise).
+                  });
+
+                  // ── 2. Synthesise entity objects ────────────────────────────────
+                  const entities = ordered.map(e => {
+                    const d = e.data;
+                    const isTargetEntity = e.id === chop.target;
+                    const kindToType = {
+                      TestMethod: 'TEST_METHOD',
+                      Method:     'METHOD',
+                      CallSite:   chop.asserts.has(e.id) ? 'ASSERT_SITE' : 'CALL_SITE',
+                      Literal:    'LITERAL',
+                      Field:      'FIELD',
+                      Type:       'TYPE'
+                    };
+                    const type = kindToType[d.kind] || d.kind.toUpperCase();
+                    const title = entityTitle(d, type);
+                    const description = entityDescription(d, type, isTargetEntity, idToRef);
+                    const attributes = entityAttributes(d, type, isTargetEntity, idToRef);
+                    return { id: e.ref, type, title, description, attributes };
+                  });
+
+                  // ── 3. Relationships ────────────────────────────────────────────
+                  const KIND_TO_REL = {
+                    Calls:       'CALLS',
+                    AstContains: 'CONTAINS', // we'll keep only the interesting ones
+                    Ddg:         'DATA_FLOW',
+                    Reads:       'READS',
+                    Writes:      'WRITES',
+                    Overrides:   'OVERRIDES',
+                    RefType:     'INHERITS_FROM'
+                  };
+                  const relationships = [];
+                  cy.edges().forEach(edge => {
+                    const d = edge.data();
+                    if (!chop.nodes.has(d.source) || !chop.nodes.has(d.target)) return;
+                    const sRef = idToRef.get(d.source);
+                    const tRef = idToRef.get(d.target);
+                    if (!sRef || !tRef) return;
+                    const relType = KIND_TO_REL[d.kind];
+                    if (!relType) return;
+                    if (relType === 'CONTAINS') {
+                      // Only emit Method/TestMethod → CallSite/AssertSite (call-site anchoring).
+                      // Skip Method → Parameter/Literal/Stmt etc. — they get filtered out anyway.
+                      const tData = cy.getElementById(d.target).data();
+                      if (!tData || tData.kind !== 'CallSite') return;
+                    }
+                    const rel = {
+                      source: sRef,
+                      target: tRef,
+                      type: relType === 'CONTAINS' ? 'CONTAINS_CALL' : relType,
+                      description: relDescription(relType === 'CONTAINS' ? 'CONTAINS_CALL' : relType, sRef, tRef, idToRef, d)
+                    };
+                    if (d.kind === 'Calls' && d.viaVirtual) rel.attributes = { via_virtual: true };
+                    relationships.push(rel);
+                  });
+
+                  // ── 4. Call paths (denormalised for convenience) ────────────────
+                  const paths = chains.map((c, i) => {
+                    const steps = c.steps.map(step => {
+                      const cs = findCallSite(step.callerId, step.calleeId);
+                      return {
+                        caller: idToRef.get(step.callerId) || null,
+                        via_call_site: cs ? (idToRef.get(cs.id) || null) : null,
+                        callee: idToRef.get(step.calleeId) || null,
+                        via_virtual: !!step.edge.viaVirtual
+                      };
+                    });
+                    return {
+                      id: 'path-' + (i + 1),
+                      depth: c.steps.length,
+                      test: idToRef.get(c.testId) || null,
+                      target: idToRef.get(chop.target) || null,
+                      steps
+                    };
+                  });
+
+                  // ── 5. Assemble the document ────────────────────────────────────
+                  const doc = {
+                    schema: 'graphrag-code-slice/v1',
+                    generator: 'graph-tipper',
+                    description: 'A graph-RAG style augmentation for a Java code slice. '
+                               + 'Schema follows Microsoft GraphRAG (entities + relationships), '
+                               + 'with code-specific entity / relationship types. Use the `interpretation` '
+                               + 'block at the end to decode types if you have not seen them before.',
+                    target: {
+                      ref: idToRef.get(chop.target) || null,
+                      fqn: target.fqn || null,
+                      signature: target.signature || null,
+                      file: target.file || null,
+                      line: target.line > 0 ? target.line : null
+                    },
+                    scope: {
+                      chop_node_count: chop.nodes.size,
+                      tests_reaching_target: chop.tests.length,
+                      distinct_call_paths: chains.length,
+                      assert_sites: chop.asserts.size,
+                      truncated: !!chop.truncated
+                    },
+                    entities,
+                    relationships,
+                    paths,
+                    interpretation: {
+                      entity_types: {
+                        TEST_METHOD: 'JUnit test method that exercises a path reaching the target.',
+                        METHOD: 'Production (non-test) method on a path from a test to the target.',
+                        CALL_SITE: 'A specific call expression in source code (the "where" of a call).',
+                        ASSERT_SITE: 'A CALL_SITE whose callee matches assert*/verify*/expect* — drives test verification.',
+                        LITERAL: 'A literal value (number, string, null, …) that flows into a CALL_SITE.',
+                        FIELD: 'A class field read or written by a method in the slice.',
+                        TYPE: 'A class / interface / enum referenced by the slice (inheritance, declarations).'
+                      },
+                      relationship_types: {
+                        CONTAINS_CALL: 'Source method/test syntactically contains target call site (anchor for the call).',
+                        CALLS: 'Source call site invokes target method. attributes.via_virtual = true means virtual dispatch.',
+                        DATA_FLOW: 'Value defined at source is consumed at target (Ddg edge — typically literal → call argument).',
+                        READS: 'Source method reads target field.',
+                        WRITES: 'Source method writes target field.',
+                        OVERRIDES: 'Source method overrides target method (resolves virtual dispatch).',
+                        INHERITS_FROM: 'Source type extends or implements target type.'
+                      },
+                      conventions: [
+                        'Entity refs (id) are stable within one slice: T<n> = test, M<n> = method (M1 is always the target), C<n> = call site, A<n> = assert site, L<n> = literal, F<n> = field, Y<n> = type.',
+                        'Use the `paths` array to answer "how does a test reach the target?" without re-traversing the graph.',
+                        'Use `relationships` to ground claims about data flow / virtual dispatch / field effects.',
+                        'Method bodies are NOT in this document — use entity.attributes.file + .line to fetch the source if needed.',
+                        'Control-dependence edges (Cdg) are omitted; their information is largely covered by `paths`.'
+                      ]
+                    }
+                  };
+
+                  return JSON.stringify(doc, null, 2);
+                }
+
+                // ── helpers for the GraphRAG JSON exporter ───────────────────────
+                function entityTitle(d, type) {
+                  if (type === 'METHOD' || type === 'TEST_METHOD') return d.fqn || d.label;
+                  if (type === 'CALL_SITE' || type === 'ASSERT_SITE') return (d.code || d.callee || d.label || '').replace(/\\s+/g, ' ').trim();
+                  if (type === 'LITERAL') return (d.value || d.label || '').toString();
+                  if (type === 'FIELD') return (d.ownerTypeFqn ? d.ownerTypeFqn + '.' : '') + (d.name || d.label);
+                  if (type === 'TYPE') return d.fqn || d.label;
+                  return d.label || '';
+                }
+                function entityDescription(d, type, isTarget, idToRef) {
+                  const loc = d.file ? ' (' + d.file + (d.line > 0 ? ':' + d.line : '') + ')' : '';
+                  if (type === 'TEST_METHOD') {
+                    return 'JUnit test method `' + (d.fqn || d.label) + '`'
+                         + (d.signature ? ' with signature `' + d.signature + '`' : '') + loc + '.';
+                  }
+                  if (type === 'METHOD') {
+                    const t = isTarget ? ' This is the TARGET of the slice.' : '';
+                    return 'Production method `' + (d.fqn || d.label) + '`'
+                         + (d.signature ? ' with signature `' + d.signature + '`' : '') + loc + '.' + t;
+                  }
+                  if (type === 'CALL_SITE' || type === 'ASSERT_SITE') {
+                    const verb = type === 'ASSERT_SITE' ? 'Assertion call' : 'Call expression';
+                    const inMid = containingMethodOf(d.id);
+                    const inRef = inMid ? (idToRef.get(inMid) || null) : null;
+                    const where = inRef ? ', inside ' + inRef : '';
+                    const callee = d.callee ? ', invoking `' + d.callee + '`' : '';
+                    return verb + ' `' + (d.code || '').replace(/\\s+/g, ' ').trim() + '`'
+                         + (d.line > 0 ? ' at line ' + d.line : '') + where + callee + '.';
+                  }
+                  if (type === 'LITERAL') {
+                    const k = d.literalKind ? d.literalKind.toLowerCase() + ' ' : '';
+                    return 'Source-level ' + k + 'literal `' + d.value + '`'
+                         + (d.line > 0 ? ' at line ' + d.line : '') + '.';
+                  }
+                  if (type === 'FIELD') {
+                    return 'Class field `' + (d.name || d.label) + '`'
+                         + (d.type ? ' of type `' + d.type + '`' : '')
+                         + (d.ownerTypeFqn ? ' declared in `' + d.ownerTypeFqn + '`' : '') + '.';
+                  }
+                  if (type === 'TYPE') {
+                    const k = d.typeKind ? d.typeKind.toLowerCase() : 'type';
+                    return 'Source-level ' + k + ' `' + (d.fqn || d.label) + '`' + loc + '.';
+                  }
+                  return '';
+                }
+                function entityAttributes(d, type, isTarget, idToRef) {
+                  const a = {};
+                  if (type === 'METHOD' || type === 'TEST_METHOD') {
+                    if (d.fqn) a.fqn = d.fqn;
+                    if (d.signature) a.signature = d.signature;
+                    if (d.file) a.file = d.file;
+                    if (d.line > 0) a.line = d.line;
+                    if (type === 'TEST_METHOD' || d.isTest) a.is_test = true;
+                    if (isTarget) a.is_target = true;
+                  } else if (type === 'CALL_SITE' || type === 'ASSERT_SITE') {
+                    if (d.code) a.code = (d.code).replace(/\\s+/g, ' ').trim();
+                    if (d.callee) a.callee_fqn = d.callee;
+                    if (d.line > 0) a.line = d.line;
+                    if (d.argCount != null) a.arg_count = d.argCount;
+                    const inMid = containingMethodOf(d.id);
+                    const inRef = inMid ? (idToRef.get(inMid) || null) : null;
+                    if (inRef) a.in_method = inRef;
+                  } else if (type === 'LITERAL') {
+                    if (d.value != null) a.value = d.value;
+                    if (d.literalKind) a.literal_kind = d.literalKind;
+                    if (d.line > 0) a.line = d.line;
+                  } else if (type === 'FIELD') {
+                    if (d.name) a.name = d.name;
+                    if (d.type) a.type = d.type;
+                    if (d.ownerTypeFqn) a.owner_type = d.ownerTypeFqn;
+                  } else if (type === 'TYPE') {
+                    if (d.fqn) a.fqn = d.fqn;
+                    if (d.typeKind) a.type_kind = d.typeKind;
+                    if (d.file) a.file = d.file;
+                    if (d.line > 0) a.line = d.line;
+                  }
+                  return a;
+                }
+                function relDescription(relType, sRef, tRef, idToRef, edgeData) {
+                  if (relType === 'CONTAINS_CALL') return sRef + ' syntactically contains call site ' + tRef + '.';
+                  if (relType === 'CALLS')         return 'Call site ' + sRef + ' invokes method ' + tRef
+                                                          + (edgeData && edgeData.viaVirtual ? ' (via virtual dispatch).' : '.');
+                  if (relType === 'DATA_FLOW')     return 'Value at ' + sRef + ' flows into ' + tRef + ' (reaching-definitions).';
+                  if (relType === 'READS')         return sRef + ' reads field ' + tRef + '.';
+                  if (relType === 'WRITES')        return sRef + ' writes field ' + tRef + '.';
+                  if (relType === 'OVERRIDES')     return sRef + ' overrides ' + tRef + '.';
+                  if (relType === 'INHERITS_FROM') return sRef + ' inherits from ' + tRef + '.';
+                  return '';
                 }
                 """;
     }
