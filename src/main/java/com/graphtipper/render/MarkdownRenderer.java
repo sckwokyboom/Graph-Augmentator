@@ -154,6 +154,8 @@ public final class MarkdownRenderer {
         sb.append("#### ").append(clusterAnchor)
           .append(" Cluster: ").append(entrySimple).append(" path (")
           .append(cluster.chainsCovered()).append(" chains)\n\n");
+        String hubMarker = renderHubMarker(cluster, options == null ? null : options.scorer());
+        if (!hubMarker.isEmpty()) sb.append(hubMarker).append("\n\n");
         sb.append("**Entry-point:** `").append(cluster.entryPoint()).append("`\n");
         sb.append("**Path:** ").append(renderPathSignature(cluster.signature())).append("\n");
         sb.append("**Depth:** ").append(cluster.depth()).append("\n\n");
@@ -301,6 +303,30 @@ public final class MarkdownRenderer {
         sb.append("## Long tail\n\n");
         sb.append(singletons).append(" additional uncovered singleton paths (each represents 1 chain). ");
         sb.append("See `<hash>.json` → `clusters[].singletons` for the full list.\n\n");
+    }
+
+    /**
+     * Returns "[hub: M1, M2]" where M1, M2 are the top-2 Katz-scored methods touched by
+     * this cluster's path signature. Empty string when scorer is null or all scores are zero.
+     */
+    public static String renderHubMarker(com.graphtipper.slice.PathCluster cluster,
+                                          com.graphtipper.chop.score.KatzScorer scorer) {
+        if (scorer == null) return "";
+        var fqns = cluster.signature().fqns();
+        var scored = new java.util.ArrayList<java.util.Map.Entry<String, Double>>();
+        for (String fqn : fqns) {
+            scored.add(java.util.Map.entry(fqn,
+                scorer.score(new com.graphtipper.chop.model.MethodRef(fqn, ""))));
+        }
+        scored.sort((a, b) -> Double.compare(b.getValue(), a.getValue()));
+        var top = new java.util.ArrayList<String>();
+        for (var e : scored) {
+            if (top.size() >= 2) break;
+            if (e.getValue() <= 0.0) continue;
+            top.add(e.getKey());
+        }
+        if (top.isEmpty()) return "";
+        return "[hub: " + String.join(", ", top) + "]";
     }
 
     private static String escapePipes(String s) { return s.replace("|", "\\|"); }
