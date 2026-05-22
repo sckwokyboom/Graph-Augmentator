@@ -38,6 +38,14 @@ public final class HtmlCpgRenderer {
         html.append("</head>\n<body>\n");
         html.append(sidebar(graph, projectName));
         html.append("<div id=\"graph\"></div>\n");
+        html.append("<div id=\"graph-overlay\" class=\"graph-overlay\">\n");
+        html.append("  <div class=\"graph-overlay-inner\">\n");
+        html.append("    <h2>Pick a target method to render its chop</h2>\n");
+        html.append("    <p>This project's CPG has <b id=\"overlay-node-count\">?</b> nodes — laying it out as a single force-directed graph would take ~tens of seconds and the result would be unreadable anyway. Type a method FQN in <b>Highlight chop</b> on the left and press <b>Highlight</b>; you'll see only that chop, laid out cleanly in &lt;1 s.</p>\n");
+        html.append("    <p class=\"hint\">If you really need the full graph (slow on big projects), use the button below.</p>\n");
+        html.append("    <button id=\"render-full-btn\">Render full graph anyway</button>\n");
+        html.append("  </div>\n");
+        html.append("</div>\n");
         html.append("<div id=\"tooltip\" class=\"tooltip\" hidden></div>\n");
         html.append("<script>\nconst DATA = ").append(safe).append(";\n");
         html.append("const NODE_DESCRIPTIONS = ").append(asJsObject(NODE_DESCRIPTIONS)).append(";\n");
@@ -338,7 +346,16 @@ public final class HtmlCpgRenderer {
                 .chop-download:disabled { opacity: 0.4; cursor: not-allowed; }
                 .chop-summary { margin: 0; font-size: 12px; color: #607D8B; }
                 #details { background: white; border: 1px solid #ECEFF1; border-radius: 4px; padding: 8px; margin: 0; font-size: 11px; white-space: pre-wrap; word-break: break-word; max-height: 240px; overflow-y: auto; }
-                #graph { flex: 1; min-width: 0; height: 100vh; background: #FFFFFF; }
+                #graph { flex: 1; min-width: 0; height: 100vh; background: #FFFFFF; position: relative; }
+                .graph-overlay { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; background: #FAFAFA; z-index: 5; }
+                .graph-overlay-inner { max-width: 540px; padding: 32px 36px; text-align: center; color: #455A64; font-size: 14px; line-height: 1.5; }
+                .graph-overlay-inner h2 { font-size: 18px; margin: 0 0 12px; color: #263238; }
+                .graph-overlay-inner p { margin: 0 0 12px; }
+                .graph-overlay-inner .hint { font-size: 12px; color: #90A4AE; }
+                #render-full-btn { padding: 8px 16px; background: #ECEFF1; border: 1px solid #CFD8DC; border-radius: 4px; cursor: pointer; font-size: 13px; color: #455A64; }
+                #render-full-btn:hover { background: #CFD8DC; }
+                #render-full-btn:disabled { opacity: 0.5; cursor: progress; }
+                .graph-overlay.hidden-overlay { display: none; }
                 .tooltip { position: absolute; pointer-events: none; background: rgba(33,33,33,0.94); color: white; padding: 8px 10px; border-radius: 4px; font-size: 12px; max-width: 380px; z-index: 10; line-height: 1.45; }
                 .tooltip .k { color: #80DEEA; font-weight: 600; }
                 .tooltip .desc { color: #ECEFF1; margin: 4px 0 6px; padding: 4px 6px; background: rgba(255,255,255,0.06); border-left: 2px solid #80DEEA; border-radius: 2px; }
@@ -399,12 +416,50 @@ public final class HtmlCpgRenderer {
                 style.push({ selector: 'node.chop-test',   style: { 'border-width': 4, 'border-color': '#E65100' }});
                 style.push({ selector: 'node.chop-anchor', style: { 'border-width': 3, 'border-color': '#1565C0' }});
 
+                // Threshold below which we just lay the whole graph out eagerly with cose.
+                // Above it, we start with everything hidden and only render the chop the
+                // user picks — cose on >>1k nodes can take tens of seconds.
+                const EAGER_LAYOUT_THRESHOLD = 600;
+                const eagerMode = DATA.nodes.length <= EAGER_LAYOUT_THRESHOLD;
+                // Tracks whether cose has been run on every node (i.e. is it safe to
+                // un-isolate and show non-chop nodes without them all collapsing at 0,0?).
+                let fullLayoutDone = eagerMode;
                 const cy = cytoscape({
                   container: document.getElementById('graph'),
                   elements: DATA, style: style,
-                  layout: { name: 'cose', animate: false, idealEdgeLength: 90, nodeRepulsion: 6000, padding: 30 },
+                  layout: eagerMode
+                    ? { name: 'cose', animate: false, idealEdgeLength: 90, nodeRepulsion: 6000, padding: 30 }
+                    : { name: 'preset' },
                   wheelSensitivity: 0.2
                 });
+                // Lazy mode: hide every element until the user picks a target.
+                // The overlay covers the empty canvas with a "Pick a target" message.
+                const graphOverlay = document.getElementById('graph-overlay');
+                if (!eagerMode) {
+                  cy.batch(() => cy.elements().addClass('chop-hidden'));
+                } else if (graphOverlay) {
+                  graphOverlay.classList.add('hidden-overlay');
+                }
+                const overlayCount = document.getElementById('overlay-node-count');
+                if (overlayCount) overlayCount.textContent = String(DATA.nodes.length);
+                // "Render full graph anyway" — pricy, but available on demand.
+                const renderFullBtn = document.getElementById('render-full-btn');
+                if (renderFullBtn) {
+                  renderFullBtn.addEventListener('click', () => {
+                    renderFullBtn.disabled = true;
+                    renderFullBtn.textContent = 'Laying out ' + DATA.nodes.length + ' nodes…';
+                    // Yield to the browser so the button-state update paints.
+                    setTimeout(() => {
+                      cy.batch(() => cy.elements().removeClass('chop-hidden'));
+                      cy.layout({ name: 'cose', animate: false, idealEdgeLength: 90, nodeRepulsion: 6000, padding: 30 }).run();
+                      cy.fit(cy.elements(), 30);
+                      fullLayoutDone = true;
+                      graphOverlay.classList.add('hidden-overlay');
+                      renderFullBtn.disabled = false;
+                      renderFullBtn.textContent = 'Render full graph anyway';
+                    }, 30);
+                  });
+                }
 
                 function escape(s) {
                   return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;')
@@ -696,18 +751,48 @@ public final class HtmlCpgRenderer {
                   const target = nodes[0];
                   const chop = computeChop(target.id());
                   if (!chop) { chopSummary.textContent = 'No test asserts reach this method.'; applyChop(null); refreshChopState(null); return; }
+                  // In lazy mode the whole graph is hidden and never had positions;
+                  // force isolate on for the first chop so we don't try to fit empty space.
+                  if (!eagerMode) document.getElementById('chop-isolate').checked = true;
                   if (!savedPositions) saveCurrentPositions();
                   applyChop(chop); relayoutChop(chop);
                   refreshChopState(chop);
+                  // Hide the placeholder overlay once we have something on screen.
+                  if (graphOverlay) graphOverlay.classList.add('hidden-overlay');
                   chopSummary.textContent = `${chop.nodes.size} nodes · ${chop.tests.length} test(s) · ${chop.asserts.size} assert site(s)${chop.truncated ? ' (truncated)' : ''}`;
                 });
                 document.getElementById('chop-clear').addEventListener('click', () => {
-                  applyChop(null); restoreSavedPositions(); cy.fit(cy.elements(), 30);
+                  applyChop(null);
                   refreshChopState(null);
-                  chopSummary.textContent = '—'; document.getElementById('chop-target').value = '';
+                  document.getElementById('chop-target').value = '';
+                  if (eagerMode) {
+                    // We had a real cose layout to begin with — restore and refit.
+                    restoreSavedPositions(); cy.fit(cy.elements(), 30);
+                    chopSummary.textContent = '—';
+                  } else {
+                    // Lazy mode: re-hide everything and bring the placeholder back.
+                    cy.batch(() => cy.elements().addClass('chop-hidden'));
+                    if (graphOverlay) graphOverlay.classList.remove('hidden-overlay');
+                    chopSummary.textContent = '—';
+                  }
                 });
                 // Toggle isolate ↔ dim mode without recomputing the chop.
-                isolateCb.addEventListener('change', () => { if (currentChop) applyChop(currentChop); });
+                isolateCb.addEventListener('change', () => {
+                  if (!currentChop) return;
+                  // In lazy mode, switching OFF isolate would reveal non-chop nodes that
+                  // have no positions (everything's at 0,0) — looks awful AND restores
+                  // the lag the lazy mode exists to avoid. Run the full cose layout once
+                  // before showing the dimmed background.
+                  if (!isolateCb.checked && !fullLayoutDone) {
+                    const ok = confirm('Showing non-chop nodes requires laying out the full graph ('
+                            + DATA.nodes.length + ' nodes). This may take a while. Continue?');
+                    if (!ok) { isolateCb.checked = true; return; }
+                    cy.batch(() => cy.elements().removeClass('chop-hidden'));
+                    cy.layout({ name: 'cose', animate: false, idealEdgeLength: 90, nodeRepulsion: 6000, padding: 30 }).run();
+                    fullLayoutDone = true;
+                  }
+                  applyChop(currentChop);
+                });
                 // Download chains as human-readable text.
                 downloadBtn.addEventListener('click', () => {
                   if (!currentChop) return;
