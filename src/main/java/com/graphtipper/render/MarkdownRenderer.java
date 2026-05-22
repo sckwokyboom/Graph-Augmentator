@@ -105,7 +105,7 @@ public final class MarkdownRenderer {
             sb.append("\n");
         }
         sb.append("**Body slice around call to target:**\n```java\n")
-          .append(c.bodySlice()).append("\n```\n\n");
+          .append(maybePruneBody(c)).append("\n```\n\n");
 
         sb.append("**Return-value usage (AST-derived):**\n");
         for (var k : c.returnValueUsage().kinds()) {
@@ -323,6 +323,8 @@ public final class MarkdownRenderer {
         var fqns = cluster.signature().fqns();
         var scored = new java.util.ArrayList<java.util.Map.Entry<String, Double>>();
         for (String fqn : fqns) {
+            // NOTE: empty signature is a stub — real chop scorers key by full (fqn, signature) and will
+            // miss here. Resolved when --katz-rank wiring lands (plan §Followups, Task 9 followup).
             scored.add(java.util.Map.entry(fqn,
                 scorer.score(new com.graphtipper.chop.model.MethodRef(fqn, ""))));
         }
@@ -335,6 +337,29 @@ public final class MarkdownRenderer {
         }
         if (top.isEmpty()) return "";
         return "[hub: " + String.join(", ", top) + "]";
+    }
+
+    private String maybePruneBody(com.graphtipper.slice.ConsumerContract c) {
+        if (options == null || options.pruner() == null) return c.bodySlice();
+        if (c.bodySliceStartLine() <= 0) {
+            return c.bodySlice() + "\n// (coverage pruning skipped: source line tracking unavailable)";
+        }
+        String fileKey = packageQualifiedSourcePath(c.file());
+        if (fileKey.isEmpty()) return c.bodySlice();
+        java.util.List<String> lines = java.util.Arrays.asList(c.bodySlice().split("\n", -1));
+        java.util.List<String> annotated = com.graphtipper.slice.AstSnippetExtractor.annotateLines(
+                lines, fileKey, c.bodySliceStartLine(), options.pruner());
+        return String.join("\n", annotated);
+    }
+
+    /** Mirror of SliceCommand.packageQualifiedSourcePath — kept local so renderer stays self-contained. */
+    private static String packageQualifiedSourcePath(String filePath) {
+        if (filePath == null) return "";
+        int idx = filePath.indexOf("src/main/java/");
+        if (idx >= 0) return filePath.substring(idx + "src/main/java/".length());
+        idx = filePath.indexOf("src/test/java/");
+        if (idx >= 0) return filePath.substring(idx + "src/test/java/".length());
+        return filePath;
     }
 
     private static String escapePipes(String s) { return s.replace("|", "\\|"); }

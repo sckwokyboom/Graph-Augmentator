@@ -12,6 +12,7 @@ public record ConsumerContract(
         String file,
         int line,
         String bodySlice,
+        int bodySliceStartLine,
         ReturnValueUsage returnValueUsage,
         ExceptionHandlingNearCall exceptionHandling,
         List<ImpliedRequirement> implications,
@@ -21,5 +22,15 @@ public record ConsumerContract(
     public ConsumerContract {
         implications = List.copyOf(implications);
         clusters = List.copyOf(clusters);
+    }
+
+    /** Legacy 9-arg constructor for callers that don't yet propagate bodySliceStartLine. */
+    public ConsumerContract(String consumerFqn, String file, int line, String bodySlice,
+                             ReturnValueUsage returnValueUsage,
+                             ExceptionHandlingNearCall exceptionHandling,
+                             List<ImpliedRequirement> implications,
+                             List<PathCluster> clusters, int chainsCovered) {
+        this(consumerFqn, file, line, bodySlice, -1, returnValueUsage,
+             exceptionHandling, implications, clusters, chainsCovered);
     }
 }

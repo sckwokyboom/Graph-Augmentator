@@ -127,7 +127,7 @@ public final class BudgetPlanner {
             }
             var ordered = sortByKatz(keep, katzScorer);
             newConsumers.add(new ConsumerContract(
-                    c.consumerFqn(), c.file(), c.line(), c.bodySlice(),
+                    c.consumerFqn(), c.file(), c.line(), c.bodySlice(), c.bodySliceStartLine(),
                     c.returnValueUsage(), c.exceptionHandling(),
                     c.implications(), ordered, c.chainsCovered()));
         }
@@ -152,7 +152,7 @@ public final class BudgetPlanner {
                 newClusters.add(cluster.withSignals(newSignals));
             }
             newConsumers.add(new ConsumerContract(
-                    c.consumerFqn(), c.file(), c.line(), c.bodySlice(),
+                    c.consumerFqn(), c.file(), c.line(), c.bodySlice(), c.bodySliceStartLine(),
                     c.returnValueUsage(), c.exceptionHandling(),
                     c.implications(), newClusters, c.chainsCovered()));
         }
@@ -169,7 +169,7 @@ public final class BudgetPlanner {
                 newClusters.add(cluster.withClusterSlice(ClusterSlice.empty()));
             }
             newConsumers.add(new ConsumerContract(
-                    c.consumerFqn(), c.file(), c.line(), c.bodySlice(),
+                    c.consumerFqn(), c.file(), c.line(), c.bodySlice(), c.bodySliceStartLine(),
                     c.returnValueUsage(), c.exceptionHandling(),
                     c.implications(), newClusters, c.chainsCovered()));
         }
@@ -191,7 +191,7 @@ public final class BudgetPlanner {
                 newClusters.add(cluster.withMembers(newMembers));
             }
             newConsumers.add(new ConsumerContract(
-                    c.consumerFqn(), c.file(), c.line(), c.bodySlice(),
+                    c.consumerFqn(), c.file(), c.line(), c.bodySlice(), c.bodySliceStartLine(),
                     c.returnValueUsage(), c.exceptionHandling(),
                     c.implications(), newClusters, c.chainsCovered()));
         }
@@ -220,7 +220,7 @@ public final class BudgetPlanner {
                 newClusters.add(cluster.withSignals(filtered));
             }
             newConsumers.add(new ConsumerContract(
-                    c.consumerFqn(), c.file(), c.line(), c.bodySlice(),
+                    c.consumerFqn(), c.file(), c.line(), c.bodySlice(), c.bodySliceStartLine(),
                     c.returnValueUsage(), c.exceptionHandling(),
                     c.implications(), newClusters, c.chainsCovered()));
         }
@@ -431,6 +431,8 @@ public final class BudgetPlanner {
                                    com.graphtipper.chop.score.KatzScorer scorer) {
         double best = 0.0;
         for (String fqn : c.signature().fqns()) {
+            // NOTE: empty signature is a stub — real chop scorers key by full (fqn, signature) and will
+            // miss here. Resolved when --katz-rank wiring lands (plan §Followups, Task 9 followup).
             var ref = new com.graphtipper.chop.model.MethodRef(fqn, "");
             double s = scorer.score(ref);
             if (s > best) best = s;
