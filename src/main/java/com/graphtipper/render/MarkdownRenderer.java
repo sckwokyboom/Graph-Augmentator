@@ -6,6 +6,12 @@ import com.graphtipper.model.Node;
 
 public final class MarkdownRenderer {
 
+    private final RenderOptions options;
+
+    public MarkdownRenderer() { this(RenderOptions.defaults()); }
+
+    public MarkdownRenderer(RenderOptions options) { this.options = options; }
+
     public String render(Artifact a, TokenBudget budget, String projectKey, String projectName) {
         var sb = new StringBuilder();
         sb.append("# Graph-Tipper Augmentation\n\n");
