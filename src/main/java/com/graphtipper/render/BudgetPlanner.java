@@ -17,6 +17,14 @@ public final class BudgetPlanner {
 
     public BudgetPlanner(TokenBudget budget) { this.budget = budget; }
 
+    private com.graphtipper.chop.score.KatzScorer katzScorer;
+
+    /** Attach a Katz scorer so that {@link #evictLowRankAndSingletonClusters} sorts surviving clusters by Katz. */
+    public BudgetPlanner withScorer(com.graphtipper.chop.score.KatzScorer s) {
+        this.katzScorer = s;
+        return this;
+    }
+
     // -----------------------------------------------------------------------
     // Cluster-based eviction API (spec §7.2)
     // -----------------------------------------------------------------------
@@ -117,10 +125,11 @@ public final class BudgetPlanner {
                 if (cluster.chainsCovered() <= 1) demoted.add(cluster);
                 else keep.add(cluster);
             }
+            var ordered = sortByKatz(keep, katzScorer);
             newConsumers.add(new ConsumerContract(
                     c.consumerFqn(), c.file(), c.line(), c.bodySlice(),
                     c.returnValueUsage(), c.exceptionHandling(),
-                    c.implications(), keep, c.chainsCovered()));
+                    c.implications(), ordered, c.chainsCovered()));
         }
         return new Artifact(a.target(), a.currentBody(), a.chains(),
                 a.directTests(), newConsumers, demoted, a.truncated(), a.localContext());
@@ -403,5 +412,29 @@ public final class BudgetPlanner {
                 budget.tryAdd(String.join("", u.type().enumConstants()));
             }
         }
+    }
+
+    /**
+     * Returns clusters sorted by max Katz score over the methods touched by each cluster's
+     * path signature, descending. Null scorer = passthrough (input order preserved).
+     */
+    public static java.util.List<com.graphtipper.slice.PathCluster> sortByKatz(
+            java.util.List<com.graphtipper.slice.PathCluster> clusters,
+            com.graphtipper.chop.score.KatzScorer scorer) {
+        if (scorer == null) return clusters;
+        var copy = new java.util.ArrayList<>(clusters);
+        copy.sort((a, b) -> Double.compare(maxKatz(b, scorer), maxKatz(a, scorer)));
+        return copy;
+    }
+
+    private static double maxKatz(com.graphtipper.slice.PathCluster c,
+                                   com.graphtipper.chop.score.KatzScorer scorer) {
+        double best = 0.0;
+        for (String fqn : c.signature().fqns()) {
+            var ref = new com.graphtipper.chop.model.MethodRef(fqn, "");
+            double s = scorer.score(ref);
+            if (s > best) best = s;
+        }
+        return best;
     }
 }

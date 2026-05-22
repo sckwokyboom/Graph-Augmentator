@@ -11,7 +11,7 @@ import org.jgrapht.graph.SimpleDirectedGraph;
 import java.util.HashMap;
 import java.util.Map;
 
-public final class KatzScorer {
+public class KatzScorer {
 
     private static final double ALPHA = 0.01;
 
