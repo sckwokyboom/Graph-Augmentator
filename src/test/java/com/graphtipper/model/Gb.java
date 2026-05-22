@@ -58,6 +58,30 @@ public final class Gb {
         return this;
     }
 
+    public Gb astContains(String fromNodeId, String toNodeId) {
+        g.addEdge(new Edge.AstContains(fromNodeId, toNodeId));
+        return this;
+    }
+
+    /** Wire AstContains edges from every Method to all of its CallSite/Parameter/Literal/Stmt
+     *  children, using each child node's {@code inMethodId} / {@code ownerMethodId}. Idempotent
+     *  per (parent, child) pair via the underlying {@code addEdge}. */
+    public Gb wireAstContainsFromInMethod() {
+        for (Node n : g.allNodes()) {
+            String parent = switch (n) {
+                case Node.CallSite cs -> cs.inMethodId();
+                case Node.Parameter p -> p.ownerMethodId();
+                case Node.Literal lit -> lit.inMethodId();
+                case Node.Stmt s -> s.inMethodId();
+                default -> null;
+            };
+            if (parent == null || parent.isEmpty()) continue;
+            if (g.byId(parent) == null) continue;
+            g.addEdge(new Edge.AstContains(parent, n.id()));
+        }
+        return this;
+    }
+
     public ProjectGraph buildRaw() { return g; }
 
     public static final class MethodB {

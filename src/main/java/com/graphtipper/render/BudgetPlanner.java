@@ -58,6 +58,18 @@ public final class BudgetPlanner {
         cur = truncateSignalEvidence(cur, 40);
         if (fitEstimate(cur) <= tokenBudget.max()) return cur;
 
+        // Tier 3a: drop the structural slice (per-cluster ClusterSlice)
+        cur = dropStructuralSlice(cur);
+        if (fitEstimate(cur) <= tokenBudget.max()) return cur;
+
+        // Tier 3b: drop per-member argSlices (matrix column falls back to argsAtTarget)
+        cur = dropSlicedArgsColumn(cur);
+        if (fitEstimate(cur) <= tokenBudget.max()) return cur;
+
+        // Tier 3c: drop slice-derived behavior signals
+        cur = dropSliceBehaviorSignals(cur);
+        if (fitEstimate(cur) <= tokenBudget.max()) return cur;
+
         cur = dropLowRankConsumers(cur);
         if (fitEstimate(cur) <= tokenBudget.max()) return cur;
 
@@ -129,6 +141,74 @@ public final class BudgetPlanner {
                     newSignals.add(new BehaviorSignal(s.tag(), ev));
                 }
                 newClusters.add(cluster.withSignals(newSignals));
+            }
+            newConsumers.add(new ConsumerContract(
+                    c.consumerFqn(), c.file(), c.line(), c.bodySlice(),
+                    c.returnValueUsage(), c.exceptionHandling(),
+                    c.implications(), newClusters, c.chainsCovered()));
+        }
+        return new Artifact(a.target(), a.currentBody(), a.chains(),
+                a.directTests(), newConsumers, a.longTailSingletons(), a.truncated(), a.localContext());
+    }
+
+    /** Tier 3a: Replace each cluster's {@code clusterSlice} with the empty marker. */
+    private Artifact dropStructuralSlice(Artifact a) {
+        var newConsumers = new ArrayList<ConsumerContract>();
+        for (var c : a.consumers()) {
+            var newClusters = new ArrayList<PathCluster>();
+            for (var cluster : c.clusters()) {
+                newClusters.add(cluster.withClusterSlice(ClusterSlice.empty()));
+            }
+            newConsumers.add(new ConsumerContract(
+                    c.consumerFqn(), c.file(), c.line(), c.bodySlice(),
+                    c.returnValueUsage(), c.exceptionHandling(),
+                    c.implications(), newClusters, c.chainsCovered()));
+        }
+        return new Artifact(a.target(), a.currentBody(), a.chains(),
+                a.directTests(), newConsumers, a.longTailSingletons(), a.truncated(), a.localContext());
+    }
+
+    /** Tier 3b: Strip per-member {@link ArgSlice}s — matrix falls back to {@code argsAtTarget}. */
+    private Artifact dropSlicedArgsColumn(Artifact a) {
+        var newConsumers = new ArrayList<ConsumerContract>();
+        for (var c : a.consumers()) {
+            var newClusters = new ArrayList<PathCluster>();
+            for (var cluster : c.clusters()) {
+                var newMembers = new ArrayList<ClusterMember>();
+                for (var m : cluster.members()) {
+                    newMembers.add(new ClusterMember(
+                            m.testMethod(), m.argsAtTarget(), m.oracle(), List.of()));
+                }
+                newClusters.add(cluster.withMembers(newMembers));
+            }
+            newConsumers.add(new ConsumerContract(
+                    c.consumerFqn(), c.file(), c.line(), c.bodySlice(),
+                    c.returnValueUsage(), c.exceptionHandling(),
+                    c.implications(), newClusters, c.chainsCovered()));
+        }
+        return new Artifact(a.target(), a.currentBody(), a.chains(),
+                a.directTests(), newConsumers, a.longTailSingletons(), a.truncated(), a.localContext());
+    }
+
+    /** Tier 3c: Filter out slice-derived behavior signals. */
+    private Artifact dropSliceBehaviorSignals(Artifact a) {
+        Set<String> sliceSuffixes = Set.of(
+                "_resolves_to_literal", "_requires_dynamic_value",
+                "_is_loop_var", "_resolves_to_branch_union");
+        var newConsumers = new ArrayList<ConsumerContract>();
+        for (var c : a.consumers()) {
+            var newClusters = new ArrayList<PathCluster>();
+            for (var cluster : c.clusters()) {
+                var filtered = new ArrayList<BehaviorSignal>();
+                for (var s : cluster.signals()) {
+                    boolean isSliceSignal = false;
+                    for (var suf : sliceSuffixes) {
+                        if (s.tag().endsWith(suf)) { isSliceSignal = true; break; }
+                    }
+                    if (s.tag().equals("cluster_partial_resolution")) isSliceSignal = true;
+                    if (!isSliceSignal) filtered.add(s);
+                }
+                newClusters.add(cluster.withSignals(filtered));
             }
             newConsumers.add(new ConsumerContract(
                     c.consumerFqn(), c.file(), c.line(), c.bodySlice(),

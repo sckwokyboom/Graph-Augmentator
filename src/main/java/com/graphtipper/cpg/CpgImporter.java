@@ -121,6 +121,85 @@ public final class CpgImporter {
             litIdByJoernId.put(idOf(v), id);
         }
 
+        // METHOD_PARAMETER_IN nodes (Joern's label for formal parameters)
+        Map<String, String> paramIdByJoernId = new HashMap<>();
+        for (JsonNode v : container.path("vertices")) {
+            if (!"METHOD_PARAMETER_IN".equals(labelOf(v))) continue;
+            String parentFull = parentMethodIdOf(v, astParent, rawById);
+            if (parentFull == null) continue;
+            String id = "p:" + idOf(v);
+            var p = new Node.Parameter(id, "m:" + parentFull,
+                    propStr(v, "NAME"),
+                    propStr(v, "TYPE_FULL_NAME"),
+                    propInt(v, "INDEX", -1));
+            g.addNode(p);
+            paramIdByJoernId.put(idOf(v), id);
+        }
+
+        // MEMBER nodes (class fields)
+        Map<String, String> memberIdByJoernId = new HashMap<>();
+        for (JsonNode v : container.path("vertices")) {
+            if (!"MEMBER".equals(labelOf(v))) continue;
+            String ownerFqn = propStr(v, "OWNER_TYPE_FULL_NAME");
+            String id = "f:" + idOf(v);
+            int line = propInt(v, "LINE_NUMBER", -1);
+            var field = new Node.Field(id, ownerFqn,
+                    propStr(v, "NAME"),
+                    propStr(v, "TYPE_FULL_NAME"),
+                    List.of(),
+                    line, line);
+            g.addNode(field);
+            memberIdByJoernId.put(idOf(v), id);
+        }
+
+        // RETURN statements
+        Map<String, String> stmtIdByJoernId = new HashMap<>();
+        for (JsonNode v : container.path("vertices")) {
+            if (!"RETURN".equals(labelOf(v))) continue;
+            String parentFull = parentMethodIdOf(v, astParent, rawById);
+            String id = "s:" + idOf(v);
+            var s = new Node.Stmt(id, parentFull == null ? "" : "m:" + parentFull,
+                    propInt(v, "LINE_NUMBER", -1),
+                    Node.StmtKind.RETURN,
+                    propStr(v, "CODE"));
+            g.addNode(s);
+            stmtIdByJoernId.put(idOf(v), id);
+        }
+
+        // CONTROL_STRUCTURE: if / for / while / try / etc.
+        for (JsonNode v : container.path("vertices")) {
+            if (!"CONTROL_STRUCTURE".equals(labelOf(v))) continue;
+            String parentFull = parentMethodIdOf(v, astParent, rawById);
+            String id = "s:" + idOf(v);
+            Node.StmtKind kind = stmtKindFor(propStr(v, "CONTROL_STRUCTURE_TYPE"));
+            var s = new Node.Stmt(id, parentFull == null ? "" : "m:" + parentFull,
+                    propInt(v, "LINE_NUMBER", -1),
+                    kind,
+                    propStr(v, "CODE"));
+            g.addNode(s);
+            stmtIdByJoernId.put(idOf(v), id);
+        }
+
+        // Resolve a Joern vertex id to a ProjectGraph node id, regardless of vertex kind.
+        java.util.function.Function<String, String> nodeIdOf = (String joernId) -> {
+            String r = callSiteIdByJoernId.get(joernId);
+            if (r != null) return r;
+            r = litIdByJoernId.get(joernId);
+            if (r != null) return r;
+            r = paramIdByJoernId.get(joernId);
+            if (r != null) return r;
+            r = memberIdByJoernId.get(joernId);
+            if (r != null) return r;
+            r = stmtIdByJoernId.get(joernId);
+            if (r != null) return r;
+            JsonNode v = rawById.get(joernId);
+            if (v == null) return null;
+            String label = labelOf(v);
+            if ("METHOD".equals(label)) return "m:" + propStr(v, "FULL_NAME");
+            if ("TYPE_DECL".equals(label)) return "t:" + propStr(v, "FULL_NAME");
+            return null;
+        };
+
         // Edges
         for (JsonNode e : container.path("edges")) {
             String lbl = labelOf(e);
@@ -143,7 +222,69 @@ public final class CpgImporter {
                     String d = callSiteIdByJoernId.getOrDefault(dst, litIdByJoernId.getOrDefault(dst, null));
                     if (s != null && d != null) g.addEdge(new Edge.Ddg(s, d));
                 }
+                case "AST" -> {
+                    // Only keep AST edges where both endpoints are nodes the model represents;
+                    // intermediate IDENTIFIER/BLOCK/etc. are dropped on purpose.
+                    String s = nodeIdOf.apply(src);
+                    String d = nodeIdOf.apply(dst);
+                    if (s != null && d != null) g.addEdge(new Edge.AstContains(s, d));
+                }
+                case "CDG" -> {
+                    String s = nodeIdOf.apply(src);
+                    String d = nodeIdOf.apply(dst);
+                    if (s != null && d != null) g.addEdge(new Edge.Cdg(s, d));
+                }
+                case "OVERRIDES" -> {
+                    String s = nodeIdOf.apply(src);
+                    String d = nodeIdOf.apply(dst);
+                    if (s != null && d != null) g.addEdge(new Edge.Overrides(s, d));
+                }
+                case "INHERITS_FROM" -> {
+                    String s = nodeIdOf.apply(src);
+                    String d = nodeIdOf.apply(dst);
+                    if (s != null && d != null) g.addEdge(new Edge.RefType(s, d));
+                }
+                case "READS" -> {
+                    String s = nodeIdOf.apply(src);
+                    String d = nodeIdOf.apply(dst);
+                    if (s != null && d != null) g.addEdge(new Edge.Reads(s, d));
+                }
+                case "WRITES" -> {
+                    String s = nodeIdOf.apply(src);
+                    String d = nodeIdOf.apply(dst);
+                    if (s != null && d != null) g.addEdge(new Edge.Writes(s, d));
+                }
                 default -> {}
+            }
+        }
+
+        // Synthesize AstContains(method → child) for every CallSite/Literal/Parameter we
+        // loaded. Joern's AST edges only connect methods to their *direct* AST children
+        // (BLOCK, METHOD_PARAMETER_IN, ANNOTATION) — CALL and LITERAL are deep descendants,
+        // so without this synthesis there is no way for a viz traversal to step from a
+        // Method into its body. PARENT_METHOD_ID is already exported on every CALL/LITERAL/
+        // METHOD_PARAMETER_IN, so we reuse what we have. Dedupe against any AST edges that
+        // already produced the same parent→child pair.
+        java.util.Set<String> astSeen = new java.util.HashSet<>();
+        for (Node from : g.allNodes()) {
+            for (Edge ex : g.outgoing(from.id())) {
+                if (ex instanceof Edge.AstContains ac) astSeen.add(ac.fromId() + "→" + ac.toId());
+            }
+        }
+        java.util.List<Node> snapshot = new java.util.ArrayList<>(g.allNodes());
+        for (Node n : snapshot) {
+            String parent = switch (n) {
+                case Node.CallSite cs -> cs.inMethodId();
+                case Node.Literal lit -> lit.inMethodId();
+                case Node.Parameter p -> p.ownerMethodId();
+                case Node.Stmt s -> s.inMethodId();
+                default -> null;
+            };
+            if (parent == null || parent.isEmpty()) continue;
+            if (!(g.byId(parent) instanceof Node.Method)) continue;
+            String key = parent + "→" + n.id();
+            if (astSeen.add(key)) {
+                g.addEdge(new Edge.AstContains(parent, n.id()));
             }
         }
 
@@ -173,6 +314,16 @@ public final class CpgImporter {
             if (replacement != null) parts[i] = replacement;
         }
         return String.join("/", parts);
+    }
+
+    private static Node.StmtKind stmtKindFor(String controlStructureType) {
+        if (controlStructureType == null) return Node.StmtKind.OTHER;
+        return switch (controlStructureType) {
+            case "IF", "ELSE", "SWITCH" -> Node.StmtKind.IF;
+            case "FOR", "WHILE", "DO" -> Node.StmtKind.LOOP;
+            case "RETURN" -> Node.StmtKind.RETURN;
+            default -> Node.StmtKind.OTHER;
+        };
     }
 
     private static int propInt(JsonNode vertex, String key, int defaultValue) {

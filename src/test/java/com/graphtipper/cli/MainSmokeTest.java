@@ -42,6 +42,7 @@ class MainSmokeTest {
 
         // 3. Invoke Main.
         int code = new CommandLine(new Main()).execute(
+                "slice",
                 "--project", project.toString(),
                 "--target", "src/main/java/p/C.java#C.target(int)",
                 "--out", out.toString());
