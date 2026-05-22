@@ -37,13 +37,17 @@ public final class HtmlCpgRenderer {
         html.append("<style>").append(css()).append("</style>\n");
         html.append("</head>\n<body>\n");
         html.append(sidebar(graph, projectName));
-        html.append("<div id=\"graph\"></div>\n");
-        html.append("<div id=\"graph-overlay\" class=\"graph-overlay\">\n");
-        html.append("  <div class=\"graph-overlay-inner\">\n");
-        html.append("    <h2>Pick a target method to render its chop</h2>\n");
-        html.append("    <p>This project's CPG has <b id=\"overlay-node-count\">?</b> nodes — laying it out as a single force-directed graph would take ~tens of seconds and the result would be unreadable anyway. Type a method FQN in <b>Highlight chop</b> on the left and press <b>Highlight</b>; you'll see only that chop, laid out cleanly in &lt;1 s.</p>\n");
-        html.append("    <p class=\"hint\">If you really need the full graph (slow on big projects), use the button below.</p>\n");
-        html.append("    <button id=\"render-full-btn\">Render full graph anyway</button>\n");
+        // The overlay lives INSIDE #graph so its `position: absolute; inset: 0`
+        // is anchored to the graph canvas only and does not eclipse the sidebar
+        // (where the Highlight-chop input actually lives).
+        html.append("<div id=\"graph\">\n");
+        html.append("  <div id=\"graph-overlay\" class=\"graph-overlay\">\n");
+        html.append("    <div class=\"graph-overlay-inner\">\n");
+        html.append("      <h2>Pick a target method to render its chop</h2>\n");
+        html.append("      <p>This project's CPG has <b id=\"overlay-node-count\">?</b> nodes — laying it out as a single force-directed graph would take ~tens of seconds and the result would be unreadable anyway. Use the <b>Highlight chop</b> panel on the left: type or pick a method FQN, then press <b>Highlight</b>. You'll see only that chop, laid out cleanly in &lt;1 s.</p>\n");
+        html.append("      <p class=\"hint\">If you really need the full graph (slow on big projects), use the button below.</p>\n");
+        html.append("      <button id=\"render-full-btn\">Render full graph anyway</button>\n");
+        html.append("    </div>\n");
         html.append("  </div>\n");
         html.append("</div>\n");
         html.append("<div id=\"tooltip\" class=\"tooltip\" hidden></div>\n");
