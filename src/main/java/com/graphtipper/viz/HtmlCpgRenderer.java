@@ -246,7 +246,8 @@ public final class HtmlCpgRenderer {
         s.append("    </div>\n");
         s.append("    <label class=\"chop-mode\" title=\"Off: dim non-chop elements (keep them visible, greyed). On: hide them completely from the canvas — much lighter to render for big graphs.\">")
          .append("<input id=\"chop-isolate\" type=\"checkbox\"> Isolate (hide non-chop)</label>\n");
-        s.append("    <button id=\"chop-download\" class=\"chop-download\" disabled title=\"Download a human-readable .txt of every test→target chain in the current chop, with node and edge metadata.\">Download chains</button>\n");
+        s.append("    <button id=\"chop-download\" class=\"chop-download\" disabled title=\"Human-readable .txt of every test→target chain in the current chop, with node and edge metadata. Good for eyeballing against source code.\">Download chains (.txt)</button>\n");
+        s.append("    <button id=\"chop-download-llm\" class=\"chop-download\" disabled title=\"GraphRAG-style markdown augmentation: typed entities (M/T/C/A/L/F refs), call paths, data flow, field accesses, overrides. Drop into an LLM prompt as code-slice context.\">Download LLM context (.md)</button>\n");
         s.append("    <p id=\"chop-summary\" class=\"chop-summary\">—</p>\n");
         s.append("  </div>\n");
 
@@ -733,11 +734,13 @@ public final class HtmlCpgRenderer {
                 });
                 const chopSummary = document.getElementById('chop-summary');
                 const downloadBtn = document.getElementById('chop-download');
+                const downloadLlmBtn = document.getElementById('chop-download-llm');
                 const isolateCb = document.getElementById('chop-isolate');
                 let currentChop = null;
                 function refreshChopState(chop) {
                   currentChop = chop;
                   downloadBtn.disabled = !chop;
+                  downloadLlmBtn.disabled = !chop;
                 }
                 document.getElementById('chop-go').addEventListener('click', () => {
                   const fqn = document.getElementById('chop-target').value.trim();
@@ -794,18 +797,24 @@ public final class HtmlCpgRenderer {
                   applyChop(currentChop);
                 });
                 // Download chains as human-readable text.
-                downloadBtn.addEventListener('click', () => {
-                  if (!currentChop) return;
-                  const text = renderChainsText(currentChop);
+                function triggerDownload(text, prefix, ext, mime) {
                   const targetData = cy.getElementById(currentChop.target).data();
                   const fqn = targetData.fqn || 'target';
                   const safe = fqn.replace(/[^A-Za-z0-9_.-]+/g, '_');
-                  const blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
+                  const blob = new Blob([text], { type: mime + ';charset=utf-8' });
                   const a = document.createElement('a');
                   a.href = URL.createObjectURL(blob);
-                  a.download = 'chains-' + safe + '.txt';
+                  a.download = prefix + '-' + safe + '.' + ext;
                   document.body.appendChild(a); a.click();
                   setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 0);
+                }
+                downloadBtn.addEventListener('click', () => {
+                  if (!currentChop) return;
+                  triggerDownload(renderChainsText(currentChop), 'chains', 'txt', 'text/plain');
+                });
+                downloadLlmBtn.addEventListener('click', () => {
+                  if (!currentChop) return;
+                  triggerDownload(renderLlmAugmentation(currentChop), 'slice', 'md', 'text/markdown');
                 });
 
                 // ---- Chain enumeration & rendering ----------------------------------------
@@ -969,6 +978,282 @@ public final class HtmlCpgRenderer {
                   lines.push('       │');
                   lines.push('       │   ' + kind + (viaVirtual ? '  (virtual)' : ''));
                   lines.push('       ▼');
+                }
+
+                // ─────────────────────────────────────────────────────────────────
+                // GraphRAG-style markdown augmentation for LLM prompts.
+                //
+                // Microsoft's GraphRAG (2024) showed that LLMs answer questions about
+                // a corpus much better when given a typed graph of entities + relations
+                // than when given embedding-retrieved text alone. We apply the same
+                // idea to a code slice: instead of dumping raw source, we dump a
+                // structured chop with stable refs (M1, T3, C7, …), an explicit
+                // call-path index, data-flow / field / override relations, and a
+                // short interpretation guide so the model can parse the format
+                // without prior knowledge.
+                // ─────────────────────────────────────────────────────────────────
+                // For a CPG node that lives inside a method (CallSite, Literal, Stmt, Parameter),
+                // walk its incoming AstContains edges to find the enclosing Method / TestMethod id.
+                function containingMethodOf(nodeId) {
+                  for (const e of (adjIn.get(nodeId) || [])) {
+                    if (e.kind !== 'AstContains') continue;
+                    const owner = cy.getElementById(e.source).data();
+                    if (owner && (owner.kind === 'Method' || owner.kind === 'TestMethod')) return e.source;
+                  }
+                  return null;
+                }
+                function renderLlmAugmentation(chop) {
+                  const target = cy.getElementById(chop.target).data();
+                  const chains = enumerateChains(chop);
+
+                  // Step 1 ─ assign typed refs to every node in chop.
+                  const idToRef = new Map();
+                  const tests = [], methods = [], callSites = [], asserts = [], literals = [], fields = [], types = [];
+                  chop.nodes.forEach(id => {
+                    const d = cy.getElementById(id).data();
+                    if (!d) return;
+                    let bucket = null, prefix = '';
+                    if (d.kind === 'TestMethod')     { bucket = tests;     prefix = 'T'; }
+                    else if (d.kind === 'Method')    { bucket = methods;   prefix = 'M'; }
+                    else if (d.kind === 'CallSite') {
+                      if (chop.asserts.has(id))      { bucket = asserts;   prefix = 'A'; }
+                      else                           { bucket = callSites; prefix = 'C'; }
+                    }
+                    else if (d.kind === 'Literal')   { bucket = literals;  prefix = 'L'; }
+                    else if (d.kind === 'Field')     { bucket = fields;    prefix = 'F'; }
+                    else if (d.kind === 'Type')      { bucket = types;     prefix = 'Y'; }
+                    if (!bucket) return; // Parameters and Stmts intentionally skipped — too noisy.
+                    const ref = prefix + (bucket.length + 1);
+                    idToRef.set(id, ref);
+                    bucket.push({ ref, id, data: d });
+                  });
+                  // Order methods so the target comes first.
+                  methods.sort((a, b) => (a.id === chop.target ? -1 : b.id === chop.target ? 1 : 0));
+
+                  // Step 2 ─ render markdown.
+                  const md = [];
+                  md.push('# Code Slice Augmentation');
+                  md.push('');
+                  md.push('A graph-structured slice of a Java CPG, focused on a single target method.');
+                  md.push('Use it as additional context when answering questions about how this method');
+                  md.push('is reached, exercised, or tested. Every entity has a stable ref (e.g. `M3`,');
+                  md.push('`T1`, `C5`) so you can cite specific nodes in your answer.');
+                  md.push('');
+
+                  // Target block
+                  md.push('## Target');
+                  md.push('');
+                  md.push('- **fqn**: `' + (target.fqn || '?') + '`');
+                  if (target.signature) md.push('- **signature**: `' + target.signature + '`');
+                  if (target.file) md.push('- **location**: `' + target.file + (target.line > 0 ? ':' + target.line : '') + '`');
+                  const targetRef = idToRef.get(chop.target);
+                  if (targetRef) md.push('- **ref**: `' + targetRef + '`');
+                  md.push('');
+
+                  // Scope summary
+                  md.push('## Scope');
+                  md.push('');
+                  md.push('- Chop size: **' + chop.nodes.size + '** CPG nodes (backward-from-target ∩ forward-from-tests-with-asserts)');
+                  md.push('- Test methods reaching the target: **' + chop.tests.length + '**');
+                  md.push('- Distinct call paths: **' + chains.length + '**'
+                          + (chains.length ? ' (depths ' + Math.min.apply(null, chains.map(c => c.steps.length))
+                                           + '‥' + Math.max.apply(null, chains.map(c => c.steps.length)) + ')' : ''));
+                  md.push('- Assert sites in scope: **' + chop.asserts.size + '**');
+                  if (chop.truncated) md.push('- ⚠ truncated: chop BFS hit its node budget; the slice is incomplete.');
+                  md.push('');
+
+                  // ── Entities ────────────────────────────────────────────────────
+                  md.push('## Entities');
+                  md.push('');
+
+                  if (tests.length) {
+                    md.push('### Test methods');
+                    md.push('');
+                    tests.forEach(e => {
+                      const sig = e.data.signature ? ' — `' + e.data.signature + '`' : '';
+                      const loc = e.data.file ? ' — at `' + e.data.file + (e.data.line > 0 ? ':' + e.data.line : '') + '`' : '';
+                      md.push('- `' + e.ref + '` **' + (e.data.fqn || e.data.label) + '`()`**' + sig + loc);
+                    });
+                    md.push('');
+                  }
+                  if (methods.length) {
+                    md.push('### Methods');
+                    md.push('');
+                    methods.forEach(e => {
+                      const star = e.id === chop.target ? ' **(TARGET)**' : '';
+                      const sig = e.data.signature ? ' — `' + e.data.signature + '`' : '';
+                      const loc = e.data.file ? ' — at `' + e.data.file + (e.data.line > 0 ? ':' + e.data.line : '') + '`' : '';
+                      md.push('- `' + e.ref + '` **' + (e.data.fqn || e.data.label) + '**' + sig + loc + star);
+                    });
+                    md.push('');
+                  }
+                  if (callSites.length) {
+                    md.push('### Call sites');
+                    md.push('');
+                    md.push('Each entry: ref · source expression · location · invoked callee.');
+                    md.push('');
+                    callSites.forEach(e => {
+                      const code = (e.data.code || e.data.label || '?').replace(/\\s+/g, ' ').trim();
+                      const loc = e.data.line > 0 ? ' (line ' + e.data.line + ')' : '';
+                      const inMethodId = containingMethodOf(e.id);
+                      const inMethod = inMethodId ? (idToRef.get(inMethodId) || '?') : '?';
+                      const callee = e.data.callee ? ' → calls `' + e.data.callee + '`' : '';
+                      md.push('- `' + e.ref + '` in `' + inMethod + '`: `' + code + '`' + loc + callee);
+                    });
+                    md.push('');
+                  }
+                  if (asserts.length) {
+                    md.push('### Assert sites');
+                    md.push('');
+                    asserts.forEach(e => {
+                      const code = (e.data.code || e.data.label || '?').replace(/\\s+/g, ' ').trim();
+                      const loc = e.data.line > 0 ? ' (line ' + e.data.line + ')' : '';
+                      const inMethodId = containingMethodOf(e.id);
+                      const inTest = inMethodId ? (idToRef.get(inMethodId) || '?') : '?';
+                      md.push('- `' + e.ref + '` in `' + inTest + '`: `' + code + '`' + loc);
+                    });
+                    md.push('');
+                  }
+                  if (literals.length) {
+                    md.push('### Literals (in scope, used by chop call sites)');
+                    md.push('');
+                    literals.forEach(e => {
+                      const val = (e.data.value || '?').replace(/\\s+/g, ' ').trim();
+                      const k = e.data.literalKind ? '[' + e.data.literalKind + '] ' : '';
+                      const loc = e.data.line > 0 ? ' at line ' + e.data.line : '';
+                      md.push('- `' + e.ref + '` ' + k + '`' + val + '`' + loc);
+                    });
+                    md.push('');
+                  }
+                  if (fields.length) {
+                    md.push('### Fields');
+                    md.push('');
+                    fields.forEach(e => {
+                      const type = e.data.type ? ': `' + e.data.type + '`' : '';
+                      const owner = e.data.ownerTypeFqn ? ' in `' + e.data.ownerTypeFqn + '`' : '';
+                      md.push('- `' + e.ref + '` `' + (e.data.name || e.data.label) + '`' + type + owner);
+                    });
+                    md.push('');
+                  }
+                  if (types.length) {
+                    md.push('### Types');
+                    md.push('');
+                    types.forEach(e => {
+                      const kind = e.data.typeKind ? ' (' + e.data.typeKind.toLowerCase() + ')' : '';
+                      const loc = e.data.file ? ' at `' + e.data.file + (e.data.line > 0 ? ':' + e.data.line : '') + '`' : '';
+                      md.push('- `' + e.ref + '` `' + (e.data.fqn || e.data.label) + '`' + kind + loc);
+                    });
+                    md.push('');
+                  }
+
+                  // ── Relations ───────────────────────────────────────────────────
+                  md.push('## Relations');
+                  md.push('');
+
+                  // Call paths
+                  if (chains.length) {
+                    md.push('### Call paths (test → target)');
+                    md.push('');
+                    md.push('Each path lists every CPG node it touches as `T → C → M → C → … → M`.');
+                    md.push('To inspect the actual code at a step, look up the `C` ref in **Call sites**.');
+                    md.push('');
+                    chains.forEach((c, i) => {
+                      const seq = [idToRef.get(c.testId) || '?'];
+                      const detail = [];
+                      c.steps.forEach((step, j) => {
+                        const cs = findCallSite(step.callerId, step.calleeId);
+                        let csRef = cs ? (idToRef.get(cs.id) || null) : null;
+                        if (csRef) seq.push(csRef);
+                        seq.push(idToRef.get(step.calleeId) || '?');
+                        if (step.edge.viaVirtual) detail.push('  - step ' + (j+1) + ': virtual dispatch');
+                      });
+                      md.push('- **Path ' + (i+1) + '** (depth ' + c.steps.length + '): ' + seq.join(' → '));
+                      detail.forEach(d => md.push(d));
+                    });
+                    md.push('');
+                  }
+
+                  // Inter-entity edges (Ddg, Reads, Writes, Overrides, RefType)
+                  const ddg = [], reads = [], writes = [], overs = [], reftypes = [];
+                  cy.edges().forEach(e => {
+                    const d = e.data();
+                    if (!chop.nodes.has(d.source) || !chop.nodes.has(d.target)) return;
+                    const sR = idToRef.get(d.source), tR = idToRef.get(d.target);
+                    if (!sR || !tR) return; // skip edges involving filtered-out kinds (Parameter, Stmt)
+                    if      (d.kind === 'Ddg')       ddg.push(sR + ' → ' + tR);
+                    else if (d.kind === 'Reads')     reads.push(sR + ' reads ' + tR);
+                    else if (d.kind === 'Writes')    writes.push(sR + ' writes ' + tR);
+                    else if (d.kind === 'Overrides') overs.push(sR + ' overrides ' + tR);
+                    else if (d.kind === 'RefType')   reftypes.push(sR + ' inherits from ' + tR);
+                  });
+                  if (ddg.length) {
+                    md.push('### Data flow (Ddg — value defined at source is used at target)');
+                    md.push('');
+                    ddg.forEach(x => md.push('- ' + x));
+                    md.push('');
+                  }
+                  if (reads.length || writes.length) {
+                    md.push('### Field accesses');
+                    md.push('');
+                    reads.forEach(x => md.push('- ' + x));
+                    writes.forEach(x => md.push('- ' + x));
+                    md.push('');
+                  }
+                  if (overs.length) {
+                    md.push('### Virtual dispatch (Overrides)');
+                    md.push('');
+                    overs.forEach(x => md.push('- ' + x));
+                    md.push('');
+                  }
+                  if (reftypes.length) {
+                    md.push('### Type hierarchy');
+                    md.push('');
+                    reftypes.forEach(x => md.push('- ' + x));
+                    md.push('');
+                  }
+
+                  // ── Interpretation guide ─────────────────────────────────────────
+                  md.push('## How to read this file');
+                  md.push('');
+                  md.push('**Entity ref prefixes**');
+                  md.push('');
+                  md.push('| prefix | meaning |');
+                  md.push('|---|---|');
+                  md.push('| `T<n>` | JUnit test method |');
+                  md.push('| `M<n>` | production method (target gets the first slot) |');
+                  md.push('| `C<n>` | call site — a specific call expression in source |');
+                  md.push('| `A<n>` | assert site — a `C` that invokes `assert*` / `verify*` / `expect*` |');
+                  md.push('| `L<n>` | literal value (number, string, …) |');
+                  md.push('| `F<n>` | class field |');
+                  md.push('| `Y<n>` | class / interface / enum |');
+                  md.push('');
+                  md.push('**Relation semantics**');
+                  md.push('');
+                  md.push('- A call path `T1 → C5 → M2 → C7 → M3` reads: test T1 contains call site C5 which');
+                  md.push('  invokes M2; M2 contains call site C7 which invokes M3; … until the target.');
+                  md.push('- `X → Y` under *Data flow* means a value defined at X is consumed at Y');
+                  md.push('  (literal → call argument, or expression → next-statement use).');
+                  md.push('- `M reads F` / `M writes F`: method `M` accesses field `F`.');
+                  md.push('- `Ma overrides Mb`: `Ma` is the concrete override of `Mb` — needed to reason about');
+                  md.push('  which method actually runs at a virtual call site.');
+                  md.push('- Step markers like *step k: virtual dispatch* mean that particular call was');
+                  md.push('  resolved through virtual dispatch (interface / abstract / overridden method).');
+                  md.push('');
+                  md.push('**What is NOT in this file**');
+                  md.push('');
+                  md.push('- Method bodies — refer to source via the `location` field on each `M<n>`/`T<n>`.');
+                  md.push('- Parameters and intermediate `Stmt` nodes — folded into signatures and call codes.');
+                  md.push('- Control dependence (Cdg) edges — informally captured by the call paths.');
+                  md.push('');
+                  md.push('**Suggested ways to use this context**');
+                  md.push('');
+                  md.push('1. To answer "which tests cover `' + (target.fqn || 'the target') + '`?", list every `T<n>`.');
+                  md.push('2. To answer "how does test `T<n>` reach the target?", find the path starting at `T<n>` under *Call paths*.');
+                  md.push('3. To answer "what values flow into the target?", combine *Call paths* with *Data flow* edges into the relevant `C<n>`s.');
+                  md.push('4. To answer "what does this method touch?", look at `M<n>` and follow `reads` / `writes` / outgoing `C<n>`s.');
+                  md.push('');
+
+                  return md.join('\\n');
                 }
                 """;
     }
