@@ -774,67 +774,116 @@ public final class HtmlCpgRenderer {
                   }
                   return null;
                 }
-                function nodeDescriptor(d) {
-                  if (!d) return '<unknown>';
-                  const parts = [d.fqn || d.label || d.id];
-                  if (d.file) parts.push(d.file + (d.line && d.line > 0 ? ':' + d.line : ''));
-                  if (d.signature) parts.push(d.signature);
-                  return parts.join('  |  ');
-                }
+                /**
+                 * Render the chop's chains as text optimised for reading next to source
+                 * code. Each chain shows EVERY CPG vertex it touches (TestMethod,
+                 * intermediate Methods, the explicit CallSite anchor between each pair)
+                 * with the connecting edge kind (AstContains, Calls, plus a "virtual"
+                 * marker on Calls when applicable). Edge kinds that don't shape the call
+                 * skeleton (Ddg, Cdg, Reads, Writes) are deliberately omitted to keep
+                 * the file scannable — those are still inspectable in the HTML.
+                 */
                 function renderChainsText(chop) {
                   const chains = enumerateChains(chop);
-                  const targetData = cy.getElementById(chop.target).data();
+                  const target = cy.getElementById(chop.target).data();
                   const lines = [];
-                  lines.push('═══ Chop: ' + (targetData.fqn || targetData.label) + ' ═══');
-                  lines.push('Target node:');
-                  lines.push('  kind:      ' + targetData.kind);
-                  lines.push('  fqn:       ' + (targetData.fqn || '-'));
-                  if (targetData.signature) lines.push('  signature: ' + targetData.signature);
-                  if (targetData.file)      lines.push('  file:      ' + targetData.file + (targetData.line > 0 ? ':' + targetData.line : ''));
+                  const HR = '═════════════════════════════════════════════════════════════════════';
+
+                  // ── Header ───────────────────────────────────────────────────────
+                  lines.push(HR);
+                  lines.push('  CHOP TARGET   ' + (target.fqn || target.label));
+                  if (target.signature) lines.push('  signature     ' + target.signature);
+                  if (target.file)      lines.push('  defined at    ' + target.file + (target.line > 0 ? ':' + target.line : ''));
+                  lines.push(HR);
                   lines.push('');
-                  lines.push('Chop scope: ' + chop.nodes.size + ' nodes · '
+                  const depths = chains.map(c => c.steps.length);
+                  const minD = depths.length ? Math.min.apply(null, depths) : 0;
+                  const maxD = depths.length ? Math.max.apply(null, depths) : 0;
+                  lines.push('Scope    : ' + chop.nodes.size + ' CPG nodes · '
                           + chop.tests.length + ' test(s) · ' + chop.asserts.size + ' assert site(s)'
                           + (chop.truncated ? ' (truncated)' : ''));
-                  lines.push('Chains found: ' + chains.length);
+                  lines.push('Chains   : ' + chains.length
+                          + (chains.length ? ' (depths ' + minD + '..' + maxD + ')' : ''));
+                  lines.push('Skeleton : Calls + AstContains only. Ddg / Cdg / Reads / Writes are');
+                  lines.push('           in the chop but omitted here for brevity — see the HTML.');
                   lines.push('');
+
                   if (chains.length === 0) {
                     lines.push('(no Calls-path from any test reaches the target inside the chop scope)');
                     return lines.join('\\n');
                   }
-                  chains.forEach((c, i) => {
-                    const testData = cy.getElementById(c.testId).data();
-                    lines.push('────────────────────────────────────────────────────────────────');
-                    lines.push('[Chain ' + (i + 1) + ']  depth=' + c.steps.length);
-                    lines.push('  Test:  ' + nodeDescriptor(testData));
-                    c.steps.forEach((step, j) => {
-                      const callerData = cy.getElementById(step.callerId).data();
-                      const calleeData = cy.getElementById(step.calleeId).data();
-                      const arrow = step.edge.viaVirtual ? ' ↳ (virtual) ' : ' → ';
-                      lines.push('  step ' + (j + 1) + ': ' + (callerData.fqn || callerData.label));
-                      lines.push('       ' + arrow + (calleeData.fqn || calleeData.label));
+
+                  // ── Chains ────────────────────────────────────────────────────────
+                  chains.forEach((chain, idx) => {
+                    lines.push('');
+                    lines.push('─── Chain ' + (idx + 1) + ' of ' + chains.length
+                            + '  ·  depth ' + chain.steps.length + '  ───');
+                    lines.push('');
+                    // First vertex is the test method itself.
+                    appendMethodNode(lines, cy.getElementById(chain.testId).data(), false);
+
+                    chain.steps.forEach((step, j) => {
+                      const callee = cy.getElementById(step.calleeId).data();
                       const cs = findCallSite(step.callerId, step.calleeId);
+                      // edge: caller --AstContains--> CallSite
                       if (cs) {
-                        const at = (cs.line > 0 ? '  (line ' + cs.line + ')' : '');
-                        const code = cs.code ? '  `' + cs.code.replace(/\\s+/g, ' ').trim() + '`' : '';
-                        lines.push('       call site:' + code + at);
+                        appendEdge(lines, 'AstContains', false);
+                        appendCallSiteNode(lines, cs);
+                        appendEdge(lines, 'Calls', step.edge.viaVirtual);
+                      } else {
+                        // No anchor found — collapse to a direct Calls edge.
+                        appendEdge(lines, 'Calls', step.edge.viaVirtual);
                       }
+                      const isTarget = step.calleeId === chop.target;
+                      appendMethodNode(lines, callee, isTarget);
                     });
-                    lines.push('  Target reached: ' + nodeDescriptor(targetData));
+                    lines.push('');
                   });
-                  lines.push('────────────────────────────────────────────────────────────────');
-                  // Asserts in scope (sites where tests verify behavior).
+
+                  // ── Assert sites ──────────────────────────────────────────────────
                   if (chop.asserts && chop.asserts.size > 0) {
                     lines.push('');
-                    lines.push('Assert sites in chop (' + chop.asserts.size + '):');
+                    lines.push('─── Assert sites in chop (' + chop.asserts.size + ') ───');
+                    lines.push('');
                     chop.asserts.forEach(id => {
                       const d = cy.getElementById(id).data();
                       if (!d) return;
-                      const at = (d.line > 0 ? ' (line ' + d.line + ')' : '');
-                      lines.push('  - ' + (d.callee || d.label) + at
-                              + (d.code ? '  `' + d.code.replace(/\\s+/g, ' ').trim() + '`' : ''));
+                      const at = d.line > 0 ? ':' + d.line : '';
+                      // The assert lives in some test method — look it up to give file context.
+                      let file = '';
+                      for (const e of (adjIn.get(id) || [])) {
+                        if (e.kind !== 'AstContains') continue;
+                        const owner = cy.getElementById(e.source).data();
+                        if (owner && owner.file) { file = owner.file; break; }
+                      }
+                      const where = file ? file + at : ('line' + at);
+                      const code = d.code ? '  `' + d.code.replace(/\\s+/g, ' ').trim() + '`' : '';
+                      lines.push('  ' + (d.callee || d.label) + '  at ' + where + code);
                     });
                   }
+
                   return lines.join('\\n');
+                }
+
+                // ── Per-vertex / per-edge renderers ─────────────────────────────────
+                function appendMethodNode(lines, d, isTarget) {
+                  if (!d) { lines.push('  [?]  <missing vertex>'); return; }
+                  const kind = d.kind === 'TestMethod' ? '[TestMethod]' : '[Method]';
+                  const marker = isTarget ? '  ★ TARGET' : '';
+                  const name = d.fqn || d.label || d.id || '?';
+                  const sig  = d.signature ? '  ::  ' + d.signature : '';
+                  lines.push('  ' + kind + '  ' + name + sig + marker);
+                  if (d.file) lines.push('               at ' + d.file + (d.line > 0 ? ':' + d.line : ''));
+                }
+                function appendCallSiteNode(lines, d) {
+                  const code = d.code ? d.code.replace(/\\s+/g, ' ').trim() : (d.callee || '(call)');
+                  lines.push('  [CallSite]    ' + code);
+                  if (d.line > 0) lines.push('               at line ' + d.line);
+                }
+                function appendEdge(lines, kind, viaVirtual) {
+                  lines.push('       │');
+                  lines.push('       │   ' + kind + (viaVirtual ? '  (virtual)' : ''));
+                  lines.push('       ▼');
                 }
                 """;
     }
