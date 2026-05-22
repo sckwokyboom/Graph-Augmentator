@@ -323,8 +323,6 @@ public final class MarkdownRenderer {
         var fqns = cluster.signature().fqns();
         var scored = new java.util.ArrayList<java.util.Map.Entry<String, Double>>();
         for (String fqn : fqns) {
-            // NOTE: empty signature is a stub — real chop scorers key by full (fqn, signature) and will
-            // miss here. Resolved when --katz-rank wiring lands (plan §Followups, Task 9 followup).
             scored.add(java.util.Map.entry(fqn,
                 scorer.score(new com.graphtipper.chop.model.MethodRef(fqn, ""))));
         }

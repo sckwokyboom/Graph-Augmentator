@@ -431,8 +431,6 @@ public final class BudgetPlanner {
                                    com.graphtipper.chop.score.KatzScorer scorer) {
         double best = 0.0;
         for (String fqn : c.signature().fqns()) {
-            // NOTE: empty signature is a stub — real chop scorers key by full (fqn, signature) and will
-            // miss here. Resolved when --katz-rank wiring lands (plan §Followups, Task 9 followup).
             var ref = new com.graphtipper.chop.model.MethodRef(fqn, "");
             double s = scorer.score(ref);
             if (s > best) best = s;

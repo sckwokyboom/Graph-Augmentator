@@ -71,8 +71,8 @@ public final class SliceCommand implements Callable<Integer> {
 
     @Option(names = "--katz-rank",
             description = "Rank path clusters by max Katz centrality on the chop method graph. "
-                    + "High-centrality clusters get priority under the token budget. "
-                    + "Currently unsupported pending programmatic ChopPipeline extraction.")
+                    + "High-centrality clusters get priority under the token budget; "
+                    + "rendered consumer blocks gain `[hub: M1, M2]` markers.")
     boolean katzRank;
 
     @Option(names = "--bare",
@@ -199,10 +199,25 @@ public final class SliceCommand implements Callable<Integer> {
             var graphArtifact = new Artifact(targetMethod, currentBody, topChains,
                     directTests, consumers, singletonClusters, chainResult.truncated(), lc);
 
+            com.graphtipper.chop.score.KatzScorer katzScorer = null;
+            if (katzRank) {
+                try {
+                    var chopGraph = new com.graphtipper.chop.cli.ChopPipeline(project).build(g, targetMethod);
+                    katzScorer = new com.graphtipper.chop.score.KatzScorer(chopGraph);
+                } catch (com.graphtipper.chop.cli.ChopPipeline.EmptyTargetBodyException e) {
+                    System.err.println("warning: --katz-rank skipped — " + e.getMessage());
+                } catch (com.graphtipper.chop.reach.MaxMethodsExceededException e) {
+                    System.err.println("warning: --katz-rank skipped — chop scan exceeded max methods ("
+                            + e.count + "); ranking falls back to default order");
+                }
+            }
+
             var budget = new TokenBudget(budgetTokens);
             Artifact budgetArtifact;
             try {
-                budgetArtifact = new BudgetPlanner().fit(budgetArtifactInitial, budget);
+                BudgetPlanner planner = new BudgetPlanner();
+                if (katzScorer != null) planner = planner.withScorer(katzScorer);
+                budgetArtifact = planner.fit(budgetArtifactInitial, budget);
             } catch (BudgetPlanner.BudgetExceededException e) {
                 System.err.println("budget exceeded on minimum: " + e.getMessage());
                 return 3;
@@ -211,12 +226,6 @@ public final class SliceCommand implements Callable<Integer> {
 
             var unlimitedBudget = new TokenBudget(Integer.MAX_VALUE);
             new BudgetPlanner(unlimitedBudget).planNoEvict(fullArtifact);
-
-            if (katzRank) {
-                throw new UnsupportedOperationException(
-                        "--katz-rank requires programmatic ChopPipeline access; tracked as followup. "
-                        + "See plan §Followups in docs/superpowers/plans/2026-05-22-augmentation-eval-harness-plan.md");
-            }
 
             RenderOptions opts = RenderOptions.defaults().withBare(bare);
             if (pruneByCoverage != null) {
@@ -227,6 +236,7 @@ public final class SliceCommand implements Callable<Integer> {
                         targetMethod.lineStart(), targetMethod.lineEnd());
                 opts = opts.withPruner(pruner);
             }
+            if (katzScorer != null) opts = opts.withScorer(katzScorer);
 
             String projectName = project.getFileName().toString();
             String budgetMd = new MarkdownRenderer(opts).render(budgetArtifact, budget, projectSrcHash, projectName);
