@@ -687,4 +687,32 @@ public final class AstSnippetExtractor {
                 .findFirst()
                 .or(() -> Optional.of(candidates.get(0)));
     }
+
+    /**
+     * Replaces lines not covered by the pruner with a single placeholder comment.
+     * Consecutive unexecuted lines collapse to one placeholder. Pruner=null is a no-op.
+     *
+     * @param rawLines  body lines as they appear in source order
+     * @param fileKey   JaCoCo package-qualified source path, e.g. "com/example/Foo.java"
+     * @param startLine line number of rawLines[0] in the source
+     * @param pruner    optional; null means return rawLines unchanged
+     */
+    public static java.util.List<String> annotateLines(
+            java.util.List<String> rawLines, String fileKey, int startLine,
+            SnippetCoveragePruner pruner) {
+        if (pruner == null) return rawLines;
+        java.util.List<String> out = new java.util.ArrayList<>(rawLines.size());
+        boolean inGap = false;
+        for (int i = 0; i < rawLines.size(); i++) {
+            int line = startLine + i;
+            if (pruner.isExecuted(fileKey, line)) {
+                out.add(rawLines.get(i));
+                inGap = false;
+            } else if (!inGap) {
+                out.add("// … unexecuted by tests");
+                inGap = true;
+            }
+        }
+        return out;
+    }
 }
