@@ -32,30 +32,36 @@ public final class JacocoExecReport {
         f.setProperty("javax.xml.stream.isSupportingExternalEntities", false);
         try (InputStream in = Files.newInputStream(xml)) {
             XMLStreamReader r = f.createXMLStreamReader(in);
-            String currentPackage = null;
-            String currentSourceFile = null;
-            while (r.hasNext()) {
-                int ev = r.next();
-                if (ev == XMLStreamConstants.START_ELEMENT) {
-                    String name = r.getLocalName();
-                    if ("package".equals(name)) {
-                        currentPackage = r.getAttributeValue(null, "name");
-                    } else if ("sourcefile".equals(name)) {
-                        currentSourceFile = r.getAttributeValue(null, "name");
-                    } else if ("line".equals(name) && currentPackage != null && currentSourceFile != null) {
-                        int nr = Integer.parseInt(r.getAttributeValue(null, "nr"));
-                        int ci = parseIntSafe(r.getAttributeValue(null, "ci"));
-                        if (ci > 0) {
-                            String key = currentPackage + "/" + currentSourceFile;
-                            acc.computeIfAbsent(key, k -> new HashSet<>()).add(nr);
+            try {
+                String currentPackage = null;
+                String currentSourceFile = null;
+                while (r.hasNext()) {
+                    int ev = r.next();
+                    if (ev == XMLStreamConstants.START_ELEMENT) {
+                        String name = r.getLocalName();
+                        if ("package".equals(name)) {
+                            currentPackage = r.getAttributeValue(null, "name");
+                        } else if ("sourcefile".equals(name)) {
+                            currentSourceFile = r.getAttributeValue(null, "name");
+                        } else if ("line".equals(name) && currentPackage != null && currentSourceFile != null) {
+                            // nr is required by JaCoCo XML schema; parseInt throws on malformed input.
+                            int nr = Integer.parseInt(r.getAttributeValue(null, "nr"));
+                            int ci = parseIntSafe(r.getAttributeValue(null, "ci"));
+                            // ci > 0 means at least one instruction executed; cb-only is not produced by well-formed JaCoCo.
+                            if (ci > 0) {
+                                String key = currentPackage + "/" + currentSourceFile;
+                                acc.computeIfAbsent(key, k -> new HashSet<>()).add(nr);
+                            }
                         }
+                    } else if (ev == XMLStreamConstants.END_ELEMENT) {
+                        if ("sourcefile".equals(r.getLocalName())) currentSourceFile = null;
+                        if ("package".equals(r.getLocalName())) currentPackage = null;
                     }
-                } else if (ev == XMLStreamConstants.END_ELEMENT) {
-                    if ("sourcefile".equals(r.getLocalName())) currentSourceFile = null;
-                    if ("package".equals(r.getLocalName())) currentPackage = null;
                 }
+                return new JacocoExecReport(acc);
+            } finally {
+                r.close();
             }
-            return new JacocoExecReport(acc);
         } catch (Exception e) {
             throw new RuntimeException("failed to parse JaCoCo XML " + xml, e);
         }
