@@ -18,20 +18,25 @@ public final class PdgBuilder {
 
     public PdgBuilder(JavaParserContext ctx) { this.ctx = ctx; }
 
+    /** Convenience overload — isTargetMethod defaults to false (used by tests). */
     public MethodPDG build(Node.Method method) throws Exception {
+        return build(method, false);
+    }
+
+    public MethodPDG build(Node.Method method, boolean isTargetMethod) throws Exception {
         Path file = ctx.projectRoot().resolve(method.file());
         CompilationUnit cu = ctx.parser().parse(file).getResult()
             .orElseThrow(() -> new IllegalStateException("Could not parse " + file));
         MethodDeclaration md = locate(cu, method);
         MethodRef ref = new MethodRef(method.fqn(), method.signature());
 
-        CfgConstructor.Result cfg = new CfgConstructor().build(md, ref);
+        CfgConstructor.Result cfg = new CfgConstructor().build(md, ref, isTargetMethod);
         ExpressionExtractor.Result ee = new ExpressionExtractor().extract(md, ref, cfg);
         List<ChopEdge> cdg = new CdgConstructor().build(cfg);
         DdgConstructor.Result ddg = new DdgConstructor().build(md, ref, cfg, ee);
 
         boolean isTest = method.isTest();
-        MethodNode mn = new MethodNode(ref, isTest, false, new HashSet<>());
+        MethodNode mn = new MethodNode(ref, isTest, isTargetMethod, new HashSet<>());
         List<ChopEdge> intra = new ArrayList<>();
         intra.addAll(cfg.edges());
         intra.addAll(cdg);

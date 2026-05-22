@@ -112,15 +112,16 @@ public final class ChopCommand implements Callable<Integer> {
         PdgBuilder builder = new PdgBuilder(jpCtx);
 
         Map<MethodRef, MethodPDG> pdgs = new LinkedHashMap<>();
+        MethodRef targetRef = new MethodRef(targetMethod.fqn(), targetMethod.signature());
         for (Node.Method m : reach.involved()) {
             try {
-                pdgs.put(new MethodRef(m.fqn(), m.signature()), builder.build(m));
+                boolean isTarget = new MethodRef(m.fqn(), m.signature()).equals(targetRef);
+                pdgs.put(new MethodRef(m.fqn(), m.signature()), builder.build(m, isTarget));
             } catch (Exception e) {
                 System.err.println("chop: skipped " + m.fqn() + ": " + e.getMessage());
             }
         }
 
-        MethodRef targetRef = new MethodRef(targetMethod.fqn(), targetMethod.signature());
         MethodPDG targetPdg = pdgs.get(targetRef);
         if (targetPdg == null) {
             System.err.println("chop: target has empty body, nothing to chop");

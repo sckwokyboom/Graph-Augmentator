@@ -9,7 +9,7 @@ import picocli.CommandLine.Command;
     mixinStandardHelpOptions = true,
     versionProvider = Main.VersionProvider.class,
     description = "Graph-Tipper: CPG-based context augmentation for Java target methods.",
-    subcommands = { SliceCommand.class, ChopCommand.class }
+    subcommands = { SliceCommand.class, ChopCommand.class, InspectCommand.class }
 )
 public final class Main {
 

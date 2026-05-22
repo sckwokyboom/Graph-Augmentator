@@ -16,7 +16,12 @@ public final class CfgConstructor {
     public record Result(List<StatementNode> statements, List<ChopEdge> edges,
                          Map<StatementId, Statement> astByStatement) {}
 
+    /** Convenience overload — isTargetMethod defaults to false (used by tests). */
     public Result build(MethodDeclaration md, MethodRef ref) {
+        return build(md, ref, false);
+    }
+
+    public Result build(MethodDeclaration md, MethodRef ref, boolean isTargetMethod) {
         Map<StatementId, StatementNode> nodes = new LinkedHashMap<>();
         Map<StatementId, Statement> astMap = new LinkedHashMap<>();
         List<ChopEdge> edges = new ArrayList<>();
@@ -31,7 +36,7 @@ public final class CfgConstructor {
             String text = oneLine(s.toString());
             SourceRange src = sourceRange(s, md);
             StatementNode sn = new StatementNode(id, ref, kind, text, src,
-                new HashSet<>(), false, false);
+                new HashSet<>(), isTargetMethod, false);
             nodes.put(id, sn);
             astMap.put(id, s);
         });
