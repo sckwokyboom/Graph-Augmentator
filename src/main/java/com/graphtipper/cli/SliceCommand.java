@@ -63,6 +63,23 @@ public final class SliceCommand implements Callable<Integer> {
             description = "Disable Tier 2 static slicer; emit v2.0-compatible artifacts")
     boolean noSlice = false;
 
+    @Option(names = "--prune-by-coverage",
+            description = "Path to JaCoCo XML report. Snippet lines not covered by reaching tests "
+                    + "are collapsed to `// … unexecuted by tests`. Target method's own range "
+                    + "is excluded from the coverage signal to prevent leakage.")
+    Path pruneByCoverage;
+
+    @Option(names = "--katz-rank",
+            description = "Rank path clusters by max Katz centrality on the chop method graph. "
+                    + "High-centrality clusters get priority under the token budget; "
+                    + "rendered consumer blocks gain `[hub: M1, M2]` markers.")
+    boolean katzRank;
+
+    @Option(names = "--bare",
+            description = "Emit only the target signature + javadoc (no chains, no local context). "
+                    + "Used by the no-context arm of the eval harness.")
+    boolean bare;
+
     @Override
     public Integer call() {
         try {
@@ -182,10 +199,25 @@ public final class SliceCommand implements Callable<Integer> {
             var graphArtifact = new Artifact(targetMethod, currentBody, topChains,
                     directTests, consumers, singletonClusters, chainResult.truncated(), lc);
 
+            com.graphtipper.chop.score.KatzScorer katzScorer = null;
+            if (katzRank) {
+                try {
+                    var chopGraph = new com.graphtipper.chop.cli.ChopPipeline(project).build(g, targetMethod);
+                    katzScorer = new com.graphtipper.chop.score.KatzScorer(chopGraph);
+                } catch (com.graphtipper.chop.cli.ChopPipeline.EmptyTargetBodyException e) {
+                    System.err.println("warning: --katz-rank skipped — " + e.getMessage());
+                } catch (com.graphtipper.chop.reach.MaxMethodsExceededException e) {
+                    System.err.println("warning: --katz-rank skipped — chop scan exceeded max methods ("
+                            + e.count + "); ranking falls back to default order");
+                }
+            }
+
             var budget = new TokenBudget(budgetTokens);
             Artifact budgetArtifact;
             try {
-                budgetArtifact = new BudgetPlanner().fit(budgetArtifactInitial, budget);
+                BudgetPlanner planner = new BudgetPlanner();
+                if (katzScorer != null) planner = planner.withScorer(katzScorer);
+                budgetArtifact = planner.fit(budgetArtifactInitial, budget);
             } catch (BudgetPlanner.BudgetExceededException e) {
                 System.err.println("budget exceeded on minimum: " + e.getMessage());
                 return 3;
@@ -195,9 +227,20 @@ public final class SliceCommand implements Callable<Integer> {
             var unlimitedBudget = new TokenBudget(Integer.MAX_VALUE);
             new BudgetPlanner(unlimitedBudget).planNoEvict(fullArtifact);
 
+            RenderOptions opts = RenderOptions.defaults().withBare(bare);
+            if (pruneByCoverage != null) {
+                var report = com.graphtipper.slice.JacocoExecReport.fromXml(pruneByCoverage);
+                String tgtPkgFile = packageQualifiedSourcePath(targetMethod);
+                var pruner = com.graphtipper.slice.SnippetCoveragePruner.of(
+                        report, tgtPkgFile,
+                        targetMethod.lineStart(), targetMethod.lineEnd());
+                opts = opts.withPruner(pruner);
+            }
+            if (katzScorer != null) opts = opts.withScorer(katzScorer);
+
             String projectName = project.getFileName().toString();
-            String budgetMd = new MarkdownRenderer().render(budgetArtifact, budget, projectSrcHash, projectName);
-            String fullMd = new MarkdownRenderer().render(fullArtifact, unlimitedBudget, projectSrcHash, projectName);
+            String budgetMd = new MarkdownRenderer(opts).render(budgetArtifact, budget, projectSrcHash, projectName);
+            String fullMd = new MarkdownRenderer(opts).render(fullArtifact, unlimitedBudget, projectSrcHash, projectName);
             String graphJson = new GraphJsonRenderer().render(graphArtifact, g, projectSrcHash, projectName);
             String legacyJson = new JsonRenderer().render(budgetArtifact, budget);
 
@@ -267,6 +310,20 @@ public final class SliceCommand implements Callable<Integer> {
         } catch (Exception e) {
             throw new RuntimeException(e);
         }
+    }
+
+    /**
+     * Converts {@link Node.Method#file()} (project-relative, e.g. "src/main/java/com/example/Foo.java")
+     * to JaCoCo's package-qualified source path key (e.g. "com/example/Foo.java").
+     */
+    private static String packageQualifiedSourcePath(Node.Method m) {
+        String f = m.file();
+        if (f == null) return "";
+        int idx = f.indexOf("src/main/java/");
+        if (idx >= 0) return f.substring(idx + "src/main/java/".length());
+        idx = f.indexOf("src/test/java/");
+        if (idx >= 0) return f.substring(idx + "src/test/java/".length());
+        return f; // last resort — pass through and let JaCoCo lookup miss naturally
     }
 
     private static void writeAtomic(Path target, String content) throws java.io.IOException {

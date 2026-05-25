@@ -250,20 +250,23 @@ public final class ConsumerDeriver {
             int chainsCovered = consumerClusters.stream().mapToInt(PathCluster::chainsCovered).sum();
             java.nio.file.Path file = resolver.resolve(consumerFqn);
             String bodySlice = "(source unavailable)";
+            int bodySliceStartLine = -1;
             ReturnValueUsage usage = ReturnValueUsage.empty();
             ExceptionHandlingNearCall exHandling = ExceptionHandlingNearCall.none();
             int line = -1;
             String fileStr = "";
             if (file != null) {
-                bodySlice = nullSafe(snippetExtractor.sliceConsumerBody(file, consumerFqn, targetSimpleName));
+                var bodyResult = snippetExtractor.sliceConsumerBodyWithLine(file, consumerFqn, targetSimpleName);
+                bodySlice = bodyResult.body() != null ? bodyResult.body() : "(unavailable)";
+                bodySliceStartLine = bodyResult.startLine();
                 usage = classifyReturnValueUsage(file, consumerFqn, targetSimpleName);
                 exHandling = classifyExceptionHandling(file, consumerFqn, targetSimpleName);
                 fileStr = file.toString();
                 line = locateLine(file, consumerFqn, targetSimpleName);
             }
             var implications = ImpliedRequirementTemplates.derive(usage, exHandling);
-            out.add(new ConsumerContract(consumerFqn, fileStr, line, bodySlice, usage, exHandling,
-                    implications, consumerClusters, chainsCovered));
+            out.add(new ConsumerContract(consumerFqn, fileStr, line, bodySlice, bodySliceStartLine,
+                    usage, exHandling, implications, consumerClusters, chainsCovered));
         }
         out.sort((a, b) -> Integer.compare(b.chainsCovered(), a.chainsCovered()));
         return out;

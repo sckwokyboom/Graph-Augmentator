@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<report name="sample">
+  <sessioninfo id="s1" start="0" dump="0"/>
+  <package name="com/example">
+    <class name="com/example/Foo" sourcefilename="Foo.java">
+      <method name="bar" desc="()V" line="10">
+        <counter type="INSTRUCTION" missed="0" covered="6"/>
+      </method>
+    </class>
+    <sourcefile name="Foo.java">
+      <line nr="10" mi="0" ci="3" mb="0" cb="0"/>
+      <line nr="11" mi="0" ci="2" mb="0" cb="0"/>
+      <line nr="12" mi="4" ci="0" mb="0" cb="0"/>
+      <line nr="13" mi="0" ci="1" mb="0" cb="0"/>
+    </sourcefile>
+  </package>
+</report>

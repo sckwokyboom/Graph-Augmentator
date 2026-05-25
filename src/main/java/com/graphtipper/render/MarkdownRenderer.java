@@ -6,11 +6,25 @@ import com.graphtipper.model.Node;
 
 public final class MarkdownRenderer {
 
+    private final RenderOptions options;
+
+    public MarkdownRenderer() { this(RenderOptions.defaults()); }
+
+    public MarkdownRenderer(RenderOptions options) { this.options = options; }
+
     public String render(Artifact a, TokenBudget budget, String projectKey, String projectName) {
         var sb = new StringBuilder();
         sb.append("# Graph-Tipper Augmentation\n\n");
         sb.append("> Generated for: ").append(projectName).append(" @ ").append(projectKey).append("\n");
         sb.append("> Target: ").append(a.target().fqn()).append("\n");
+
+        boolean bare = options != null && options.bare();
+        if (bare) {
+            sb.append("> Mode: bare (signature-only)\n\n");
+            renderTarget(sb, a);
+            return sb.toString();
+        }
+
         String maxLabel = budget.max() == Integer.MAX_VALUE ? "unlimited" : Integer.toString(budget.max());
         int consumerCount = a.consumers().size();
         int clusterCount = a.consumers().stream().mapToInt(c -> c.clusters().size()).sum();
@@ -91,7 +105,7 @@ public final class MarkdownRenderer {
             sb.append("\n");
         }
         sb.append("**Body slice around call to target:**\n```java\n")
-          .append(c.bodySlice()).append("\n```\n\n");
+          .append(maybePruneBody(c)).append("\n```\n\n");
 
         sb.append("**Return-value usage (AST-derived):**\n");
         for (var k : c.returnValueUsage().kinds()) {
@@ -148,6 +162,8 @@ public final class MarkdownRenderer {
         sb.append("#### ").append(clusterAnchor)
           .append(" Cluster: ").append(entrySimple).append(" path (")
           .append(cluster.chainsCovered()).append(" chains)\n\n");
+        String hubMarker = renderHubMarker(cluster, options == null ? null : options.scorer());
+        if (!hubMarker.isEmpty()) sb.append(hubMarker).append("\n\n");
         sb.append("**Entry-point:** `").append(cluster.entryPoint()).append("`\n");
         sb.append("**Path:** ").append(renderPathSignature(cluster.signature())).append("\n");
         sb.append("**Depth:** ").append(cluster.depth()).append("\n\n");
@@ -295,6 +311,53 @@ public final class MarkdownRenderer {
         sb.append("## Long tail\n\n");
         sb.append(singletons).append(" additional uncovered singleton paths (each represents 1 chain). ");
         sb.append("See `<hash>.json` → `clusters[].singletons` for the full list.\n\n");
+    }
+
+    /**
+     * Returns "[hub: M1, M2]" where M1, M2 are the top-2 Katz-scored methods touched by
+     * this cluster's path signature. Empty string when scorer is null or all scores are zero.
+     */
+    public static String renderHubMarker(com.graphtipper.slice.PathCluster cluster,
+                                          com.graphtipper.chop.score.KatzScorer scorer) {
+        if (scorer == null) return "";
+        var fqns = cluster.signature().fqns();
+        var scored = new java.util.ArrayList<java.util.Map.Entry<String, Double>>();
+        for (String fqn : fqns) {
+            scored.add(java.util.Map.entry(fqn,
+                scorer.score(new com.graphtipper.chop.model.MethodRef(fqn, ""))));
+        }
+        scored.sort((a, b) -> Double.compare(b.getValue(), a.getValue()));
+        var top = new java.util.ArrayList<String>();
+        for (var e : scored) {
+            if (top.size() >= 2) break;
+            if (e.getValue() <= 0.0) continue;
+            top.add(e.getKey());
+        }
+        if (top.isEmpty()) return "";
+        return "[hub: " + String.join(", ", top) + "]";
+    }
+
+    private String maybePruneBody(com.graphtipper.slice.ConsumerContract c) {
+        if (options == null || options.pruner() == null) return c.bodySlice();
+        if (c.bodySliceStartLine() <= 0) {
+            return c.bodySlice() + "\n// (coverage pruning skipped: source line tracking unavailable)";
+        }
+        String fileKey = packageQualifiedSourcePath(c.file());
+        if (fileKey.isEmpty()) return c.bodySlice();
+        java.util.List<String> lines = java.util.Arrays.asList(c.bodySlice().split("\n", -1));
+        java.util.List<String> annotated = com.graphtipper.slice.AstSnippetExtractor.annotateLines(
+                lines, fileKey, c.bodySliceStartLine(), options.pruner());
+        return String.join("\n", annotated);
+    }
+
+    /** Mirror of SliceCommand.packageQualifiedSourcePath — kept local so renderer stays self-contained. */
+    private static String packageQualifiedSourcePath(String filePath) {
+        if (filePath == null) return "";
+        int idx = filePath.indexOf("src/main/java/");
+        if (idx >= 0) return filePath.substring(idx + "src/main/java/".length());
+        idx = filePath.indexOf("src/test/java/");
+        if (idx >= 0) return filePath.substring(idx + "src/test/java/".length());
+        return filePath;
     }
 
     private static String escapePipes(String s) { return s.replace("|", "\\|"); }
