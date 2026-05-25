@@ -1,0 +1,11 @@
+{
+  "standalone": [
+    {
+      "id": "picocli-putvalue",
+      "project_dir": "/tmp/picocli",
+      "target_spec": "src/main/java/picocli/CommandLine.java#TextTable.putValue(int,int,Text)",
+      "test_filter": "picocli.TextTableTest"
+    }
+  ],
+  "_comments": "Pilot-time additions (1-3 hand-picked from JavaBench PA-Solution projects) appended once Pilot-2 narrows them down."
+}
