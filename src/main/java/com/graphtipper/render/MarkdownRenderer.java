@@ -51,6 +51,7 @@ public final class MarkdownRenderer {
 
     private void renderTarget(StringBuilder sb, Artifact a) {
         var t = a.target();
+        boolean bare = options != null && options.bare();
         sb.append("## Target\n\n");
         sb.append("**File:** `").append(t.file()).append("` (lines ").append(t.lineStart())
           .append("–").append(t.lineEnd()).append(")\n\n");
@@ -58,7 +59,10 @@ public final class MarkdownRenderer {
             sb.append("**Javadoc:**\n> ").append(t.javadoc().replace("\n", "\n> ")).append("\n\n");
         }
         sb.append("**Signature:**\n```java\n").append(t.signature()).append("\n```\n\n");
-        if (a.currentBody() != null && !a.currentBody().isBlank()) {
+        // In bare mode the harness uses this as the "no-context" baseline; emitting the
+        // current body would leak the reference solution and make the gt-current vs
+        // no-context comparison degenerate.
+        if (!bare && a.currentBody() != null && !a.currentBody().isBlank()) {
             sb.append("**Current body:**\n```java\n").append(a.currentBody()).append("\n```\n\n");
         }
     }
@@ -337,6 +341,42 @@ public final class MarkdownRenderer {
         return "[hub: " + String.join(", ", top) + "]";
     }
 
+    /** Pair of (original sibling, body text to render after coverage pruning). */
+    private record SiblingRender(com.graphtipper.slice.LocalContext.SiblingMember member,
+                                  String renderedBody) {}
+
+    /**
+     * When a JaCoCo pruner is in scope, drops siblings whose entire line range has zero
+     * executed lines, and annotates the body of partially-executed siblings via
+     * {@link com.graphtipper.slice.AstSnippetExtractor#annotateLines}. Without a pruner,
+     * passes siblings through unchanged.
+     */
+    private java.util.List<SiblingRender> pruneSiblings(
+            java.util.List<com.graphtipper.slice.LocalContext.SiblingMember> siblings) {
+        var out = new java.util.ArrayList<SiblingRender>();
+        var pruner = (options == null) ? null : options.pruner();
+        for (var s : siblings) {
+            if (pruner == null || s.file() == null || s.lineStart() <= 0) {
+                out.add(new SiblingRender(s, s.body()));
+                continue;
+            }
+            String fileKey = packageQualifiedSourcePath(s.file());
+            if (fileKey.isEmpty()) { out.add(new SiblingRender(s, s.body())); continue; }
+            // Drop the sibling entirely if no line in [lineStart, lineEnd] was executed.
+            boolean anyExecuted = false;
+            for (int ln = s.lineStart(); ln <= s.lineEnd(); ln++) {
+                if (pruner.isExecuted(fileKey, ln)) { anyExecuted = true; break; }
+            }
+            if (!anyExecuted) continue;
+            // Otherwise, annotate body lines.
+            var rawLines = java.util.Arrays.asList(s.body().split("\n", -1));
+            var annotated = com.graphtipper.slice.AstSnippetExtractor.annotateLines(
+                    rawLines, fileKey, s.lineStart(), pruner);
+            out.add(new SiblingRender(s, String.join("\n", annotated)));
+        }
+        return out;
+    }
+
     private String maybePruneBody(com.graphtipper.slice.ConsumerContract c) {
         if (options == null || options.pruner() == null) return c.bodySlice();
         if (c.bodySliceStartLine() <= 0) {
@@ -379,14 +419,16 @@ public final class MarkdownRenderer {
     private void renderLocalContext(StringBuilder sb, Artifact a) {
         sb.append("## Local Context\n\n");
         var lc = a.localContext();
-        if (!lc.siblings().isEmpty()) {
+        var visibleSiblings = pruneSiblings(lc.siblings());
+        if (!visibleSiblings.isEmpty()) {
             sb.append("### Sibling members used by target\n```java\n");
-            for (var s : lc.siblings()) {
+            for (var entry : visibleSiblings) {
+                var s = entry.member();
                 if (s.javadoc() != null && !s.javadoc().isBlank()) {
                     sb.append("/** ").append(s.javadoc().replace("\n", " ")).append(" */\n");
                 }
                 sb.append(s.signature()).append("\n");
-                if (!s.body().isBlank()) sb.append(s.body()).append("\n");
+                if (!entry.renderedBody().isBlank()) sb.append(entry.renderedBody()).append("\n");
             }
             sb.append("```\n\n");
         }

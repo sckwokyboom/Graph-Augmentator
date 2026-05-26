@@ -75,6 +75,12 @@ public final class SliceCommand implements Callable<Integer> {
                     + "rendered consumer blocks gain `[hub: M1, M2]` markers.")
     boolean katzRank;
 
+    @Option(names = "--katz-max-methods",
+            description = "Max methods in the chop scan that backs --katz-rank. "
+                    + "When exceeded, --katz-rank silently falls back to default order. "
+                    + "Default: 5000 (picocli-scale).")
+    int katzMaxMethods = 5000;
+
     @Option(names = "--bare",
             description = "Emit only the target signature + javadoc (no chains, no local context). "
                     + "Used by the no-context arm of the eval harness.")
@@ -202,13 +208,14 @@ public final class SliceCommand implements Callable<Integer> {
             com.graphtipper.chop.score.KatzScorer katzScorer = null;
             if (katzRank) {
                 try {
-                    var chopGraph = new com.graphtipper.chop.cli.ChopPipeline(project).build(g, targetMethod);
+                    var chopGraph = new com.graphtipper.chop.cli.ChopPipeline(
+                            project, Integer.MAX_VALUE, katzMaxMethods).build(g, targetMethod);
                     katzScorer = new com.graphtipper.chop.score.KatzScorer(chopGraph);
                 } catch (com.graphtipper.chop.cli.ChopPipeline.EmptyTargetBodyException e) {
                     System.err.println("warning: --katz-rank skipped — " + e.getMessage());
                 } catch (com.graphtipper.chop.reach.MaxMethodsExceededException e) {
                     System.err.println("warning: --katz-rank skipped — chop scan exceeded max methods ("
-                            + e.count + "); ranking falls back to default order");
+                            + e.count + "); raise --katz-max-methods or accept default ranking");
                 }
             }
 

@@ -57,7 +57,11 @@ public final class BudgetPlanner {
      * @return a (possibly trimmed) artifact that fits within the budget
      */
     public Artifact fit(Artifact a, TokenBudget tokenBudget) {
-        Artifact cur = a;
+        // Apply Katz ordering before any budget decision: this is the ordering the user
+        // asked for via --katz-rank and it must take effect even when the artifact fits
+        // without eviction (earlier revisions buried sortByKatz inside evictLowRank...,
+        // so under budget the rendered order silently fell back to chain count).
+        Artifact cur = (katzScorer != null) ? applyKatzOrdering(a) : a;
         if (fitEstimate(cur) <= tokenBudget.max()) return cur;
 
         cur = evictLowRankAndSingletonClusters(cur);
@@ -110,6 +114,25 @@ public final class BudgetPlanner {
         TokenBudget sandbox = new TokenBudget(Integer.MAX_VALUE);
         String md = new MarkdownRenderer().render(a, sandbox, "x", "x");
         return sandbox.estimate(md);
+    }
+
+    /**
+     * Re-orders each consumer's clusters by Katz centrality, descending. Pure pre-processing
+     * step — touches nothing else. Always called first inside {@link #fit} when a scorer is set.
+     */
+    private Artifact applyKatzOrdering(Artifact a) {
+        if (katzScorer == null) return a;
+        var newConsumers = new ArrayList<ConsumerContract>();
+        for (ConsumerContract c : a.consumers()) {
+            var ordered = sortByKatz(c.clusters(), katzScorer);
+            newConsumers.add(new ConsumerContract(
+                    c.consumerFqn(), c.file(), c.line(), c.bodySlice(), c.bodySliceStartLine(),
+                    c.returnValueUsage(), c.exceptionHandling(),
+                    c.implications(), ordered, c.chainsCovered()));
+        }
+        return new Artifact(a.target(), a.currentBody(), a.chains(),
+                a.directTests(), newConsumers, a.longTailSingletons(),
+                a.truncated(), a.localContext());
     }
 
     /**
