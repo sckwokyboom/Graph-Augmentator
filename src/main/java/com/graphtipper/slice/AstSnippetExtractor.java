@@ -712,6 +712,15 @@ public final class AstSnippetExtractor {
         boolean inGap = false;
         for (int i = 0; i < rawLines.size(); i++) {
             int line = startLine + i;
+            // Structural lines (method signature lines ending in `) {` or `) {' etc.,
+            // closing braces, blank lines) are not tracked by JaCoCo as statements,
+            // so isExecuted returns false for them. Passing them through preserves
+            // the method's visual structure for the LLM — pruning them only adds noise.
+            if (isStructural(rawLines.get(i))) {
+                out.add(rawLines.get(i));
+                inGap = false;
+                continue;
+            }
             if (pruner.isExecuted(fileKey, line)) {
                 out.add(rawLines.get(i));
                 inGap = false;
@@ -721,5 +730,17 @@ public final class AstSnippetExtractor {
             }
         }
         return out;
+    }
+
+    private static boolean isStructural(String line) {
+        String s = line.strip();
+        if (s.isEmpty()) return true;
+        // Closing braces, possibly with trailing `;` or `)` (lambda close).
+        if (s.matches("^[)}\\];,]+$")) return true;
+        // Method/class declarations ending in `{`. Allows annotations, modifiers, etc.
+        if (s.endsWith("{")) return true;
+        // Pure comments (`//...`, `/*...`, `*/`, ` * ...`)
+        if (s.startsWith("//") || s.startsWith("/*") || s.startsWith("*")) return true;
+        return false;
     }
 }

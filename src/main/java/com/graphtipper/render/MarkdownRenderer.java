@@ -356,7 +356,10 @@ public final class MarkdownRenderer {
         var out = new java.util.ArrayList<SiblingRender>();
         var pruner = (options == null) ? null : options.pruner();
         for (var s : siblings) {
-            if (pruner == null || s.file() == null || s.lineStart() <= 0) {
+            // Keep unchanged when we lack the info needed to decide. Joern frequently omits
+            // LINE_NUMBER_END for short methods → lineEnd = -1; treat as "don't know, keep".
+            if (pruner == null || s.file() == null || s.lineStart() <= 0
+                    || s.lineEnd() < s.lineStart()) {
                 out.add(new SiblingRender(s, s.body()));
                 continue;
             }
