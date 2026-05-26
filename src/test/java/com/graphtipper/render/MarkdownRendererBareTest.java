@@ -49,6 +49,28 @@ class MarkdownRendererBareTest {
             .doesNotContain("x * 42");
     }
 
+    @Test void noCurrentBodyOmitsBodyButKeepsEverythingElse() {
+        // Demo-flow gate: full augmentation minus the reference implementation.
+        var target = new Node.Method(
+                "m:com.example.Foo#bar(int)", "com.example.Foo#bar(int)",
+                "bar(int)", List.of("int"), "void",
+                "src/main/java/com/example/Foo.java", 5, 10,
+                "Sets cell.",
+                false, false, List.of("public"));
+        var artifact = new Artifact(target, "void bar(int x) { return x * 42; /* SECRET */ }",
+                List.<com.graphtipper.slice.Chain>of(), false,
+                new LocalContext(List.of(), List.of()));
+        String md = new MarkdownRenderer(RenderOptions.defaults().withNoCurrentBody(true))
+                .render(artifact, new TokenBudget(20_000), "src-sha", "demo");
+        assertThat(md)
+                .doesNotContain("Current body")
+                .doesNotContain("SECRET")
+                .doesNotContain("x * 42")
+                .contains("## Target")  // target section still present
+                .contains("Sets cell.")  // javadoc still present
+                .contains("## Negative Memory");  // other sections still present
+    }
+
     @Test void nonBareModeStillEmitsAllSections() {
         var target = new Node.Method(
                 "m:com.example.Foo#bar(int)", "com.example.Foo#bar(int)",

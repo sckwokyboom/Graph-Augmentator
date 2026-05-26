@@ -61,8 +61,10 @@ public final class MarkdownRenderer {
         sb.append("**Signature:**\n```java\n").append(t.signature()).append("\n```\n\n");
         // In bare mode the harness uses this as the "no-context" baseline; emitting the
         // current body would leak the reference solution and make the gt-current vs
-        // no-context comparison degenerate.
-        if (!bare && a.currentBody() != null && !a.currentBody().isBlank()) {
+        // no-context comparison degenerate. Also gated by --no-current-body for demo flows
+        // where the LLM should be generating the body from scratch.
+        boolean suppressCurrentBody = bare || (options != null && options.noCurrentBody());
+        if (!suppressCurrentBody && a.currentBody() != null && !a.currentBody().isBlank()) {
             sb.append("**Current body:**\n```java\n").append(a.currentBody()).append("\n```\n\n");
         }
     }

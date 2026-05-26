@@ -86,6 +86,12 @@ public final class SliceCommand implements Callable<Integer> {
                     + "Used by the no-context arm of the eval harness.")
     boolean bare;
 
+    @Option(names = "--no-current-body",
+            description = "Like default mode, but omits the **Current body:** block from the "
+                    + "target section. Use when feeding the artifact to an LLM that will generate "
+                    + "the body from scratch — otherwise the reference implementation leaks.")
+    boolean noCurrentBody;
+
     @Override
     public Integer call() {
         try {
@@ -234,7 +240,7 @@ public final class SliceCommand implements Callable<Integer> {
             var unlimitedBudget = new TokenBudget(Integer.MAX_VALUE);
             new BudgetPlanner(unlimitedBudget).planNoEvict(fullArtifact);
 
-            RenderOptions opts = RenderOptions.defaults().withBare(bare);
+            RenderOptions opts = RenderOptions.defaults().withBare(bare).withNoCurrentBody(noCurrentBody);
             if (pruneByCoverage != null) {
                 var report = com.graphtipper.slice.JacocoExecReport.fromXml(pruneByCoverage);
                 String tgtPkgFile = packageQualifiedSourcePath(targetMethod);
