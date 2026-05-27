@@ -49,6 +49,55 @@ public final class MarkdownRenderer {
         return sb.toString();
     }
 
+    /**
+     * A readable Java signature for the target. {@link Node.Method#signature()} holds the raw
+     * Joern SIGNATURE (`returnType(paramTypes)` with FQNs and no method name), which is unreadable.
+     * Prefer the real declaration line from {@code currentBody} (carries modifiers + param names);
+     * this is present even under --no-current-body / --bare (only body rendering is gated, not the
+     * field). Fall back to a reconstruction from the Joern signature + fqn when no body is available.
+     */
+    private static String readableSignature(Artifact a) {
+        String body = a.currentBody();
+        if (body != null && !body.isBlank()) {
+            int brace = body.indexOf('{');
+            String decl = (brace >= 0 ? body.substring(0, brace) : body).strip()
+                    .replaceAll("\\s+", " ");
+            if (!decl.isBlank()) return decl;
+        }
+        return reconstructSignature(a.target());
+    }
+
+    /** Builds `<simpleReturn> <methodName>(<simpleParamTypes>)` from the Joern signature + fqn. */
+    private static String reconstructSignature(Node.Method m) {
+        String fqn = m.fqn() == null ? "" : m.fqn();
+        int dot = fqn.lastIndexOf('.');
+        String name = dot >= 0 ? fqn.substring(dot + 1) : fqn;
+        String sig = m.signature();
+        if (sig == null || sig.indexOf('(') < 0) {
+            String params = m.paramTypes() == null ? ""
+                    : m.paramTypes().stream().map(MarkdownRenderer::simpleType)
+                        .reduce((x, y) -> x + ", " + y).orElse("");
+            String ret = simpleType(m.returnType());
+            return (ret.isEmpty() ? "" : ret + " ") + name + "(" + params + ")";
+        }
+        int paren = sig.indexOf('(');
+        String ret = simpleType(sig.substring(0, paren));
+        String inner = sig.substring(paren + 1, sig.endsWith(")") ? sig.length() - 1 : sig.length());
+        String params = inner.isBlank() ? "" :
+                java.util.Arrays.stream(inner.split(","))
+                        .map(MarkdownRenderer::simpleType)
+                        .reduce((x, y) -> x + ", " + y).orElse("");
+        return (ret.isEmpty() ? "" : ret + " ") + name + "(" + params + ")";
+    }
+
+    private static String simpleType(String t) {
+        if (t == null) return "";
+        t = t.strip();
+        if (t.isEmpty()) return "";
+        int sep = Math.max(t.lastIndexOf('.'), t.lastIndexOf('$'));
+        return sep < 0 ? t : t.substring(sep + 1);
+    }
+
     private void renderTarget(StringBuilder sb, Artifact a) {
         var t = a.target();
         boolean bare = options != null && options.bare();
@@ -58,7 +107,7 @@ public final class MarkdownRenderer {
         if (t.javadoc() != null && !t.javadoc().isBlank()) {
             sb.append("**Javadoc:**\n> ").append(t.javadoc().replace("\n", "\n> ")).append("\n\n");
         }
-        sb.append("**Signature:**\n```java\n").append(t.signature()).append("\n```\n\n");
+        sb.append("**Signature:**\n```java\n").append(readableSignature(a)).append("\n```\n\n");
         // In bare mode the harness uses this as the "no-context" baseline; emitting the
         // current body would leak the reference solution and make the gt-current vs
         // no-context comparison degenerate. Also gated by --no-current-body for demo flows
