@@ -282,16 +282,16 @@ public final class MarkdownRenderer {
     }
 
     private static String renderPathSignature(com.graphtipper.slice.PathSignature sig) {
-        // Compress consecutive identical simple-method-names: parse, parse, parse → parse(×3)
+        // Collapse consecutive identical simple-method-names to a single occurrence:
+        // parse, parse, parse → parse. The repetition count (recursion depth / overload
+        // chaining) carries no signal for the LLM and only adds visual noise.
         var simples = sig.fqns().stream().map(MarkdownRenderer::simpleMethodName).toList();
         var out = new StringBuilder();
         int i = 0;
         while (i < simples.size()) {
             int j = i;
             while (j + 1 < simples.size() && simples.get(j + 1).equals(simples.get(i))) j++;
-            int count = j - i + 1;
-            if (count > 1) out.append(simples.get(i)).append("(×").append(count).append(")");
-            else out.append(simples.get(i));
+            out.append(simples.get(i));
             if (j + 1 < simples.size()) out.append(" → ");
             i = j + 1;
         }
