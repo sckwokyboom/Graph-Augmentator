@@ -43,6 +43,8 @@ void caller() { bar(1); }
 arg0:
   ← <UNRESOLVED: METHOD_CALL>
 
+**Primary representative:** `foo.FooTest.testThing` — `src/test/java/foo/FooTest.java:42`
+
 **Differential matrix (5 representatives of 498):**
 
 | Test | Sliced args | Oracle |
@@ -99,7 +101,16 @@ def test_keep_chains_paths_keeps_headers_drops_noise():
     assert "**Path:** parseArgs → bar" in out
     # but the UNRESOLVED noise dropped
     assert "UNRESOLVED" not in out
-    assert "[lots of UNRESOLVED noise]" not in out
+
+
+def test_keep_chains_paths_keeps_representative_test_pointer():
+    # The "which test to grep" pointer must survive paths mode (dropping it loses signal).
+    out = strip_demo(SAMPLE, keep_chains="paths")
+    assert "**Primary representative:** `foo.FooTest.testThing`" in out
+    assert "src/test/java/foo/FooTest.java:42" in out
+    # but the differential matrix table itself is gone
+    assert "Differential matrix" not in out
+    assert "| t1 |" not in out
 
 
 def test_keep_chains_full_keeps_everything():

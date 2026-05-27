@@ -29,10 +29,11 @@ from pathlib import Path
 
 DROP_SECTIONS = {"Long tail", "Negative Memory"}
 HEADER_META = ("> Budget:", "> Consumers:", "> Direct tests:", "> Generated for:")
-# Markers that begin the noisy part of a cluster block (dropped in `paths` mode).
-CLUSTER_NOISE_MARKERS = ("**Static slice", "**Primary representative",
-                         "**Differential matrix", "**Behavior signals",
-                         "**+ ")
+# In `paths` mode we keep a whitelist of per-cluster lines and drop everything else
+# (Static slice args, Differential matrix tables, Behavior signals, "+N more"). The
+# Primary representative line is kept so the LLM still has a "which test to grep" pointer.
+PATHS_KEEP_PREFIXES = ("[hub:", "**Entry-point:", "**Path:", "**Depth:",
+                       "**Primary representative:")
 
 
 def strip_demo(md: str, keep_chains: str = "none") -> str:
@@ -43,7 +44,6 @@ def strip_demo(md: str, keep_chains: str = "none") -> str:
 
     drop_section = False        # inside a ## section we drop entirely
     cluster_state = None        # None | "keep" | "drop" | "paths"
-    cluster_suppress = False    # paths mode: past the **Static slice marker
 
     for line in lines:
         # 1. Chatty header metadata.
@@ -55,7 +55,6 @@ def strip_demo(md: str, keep_chains: str = "none") -> str:
             section = line[3:].strip()
             drop_section = section in DROP_SECTIONS
             cluster_state = None
-            cluster_suppress = False
             if not drop_section:
                 out.append(line)
             continue
@@ -66,13 +65,11 @@ def strip_demo(md: str, keep_chains: str = "none") -> str:
         # 3. ### subsection ends any cluster.
         if line.startswith("### "):
             cluster_state = None
-            cluster_suppress = False
             out.append(line)
             continue
 
         # 4. #### cluster header.
         if line.startswith("#### "):
-            cluster_suppress = False
             if keep_chains == "none":
                 cluster_state = "drop"
                 continue
@@ -90,11 +87,10 @@ def strip_demo(md: str, keep_chains: str = "none") -> str:
             continue
         if cluster_state == "paths":
             stripped = line.strip()
-            if any(stripped.startswith(m) for m in CLUSTER_NOISE_MARKERS):
-                cluster_suppress = True
-            if cluster_suppress:
-                continue
-            out.append(line)
+            # Whitelist: keep the path skeleton + hub + representative test pointer; drop
+            # the Static-slice args, Differential-matrix table, Behavior signals, "+N more".
+            if stripped == "" or any(stripped.startswith(p) for p in PATHS_KEEP_PREFIXES):
+                out.append(line)
             continue
         # cluster_state in (None, "keep"): fall through to normal handling.
 
