@@ -31,12 +31,37 @@ void caller() { bar(1); }
 ```
 
 #### 4.4.1.a Cluster: foo.parseArgs path (498 chains)
+
+[hub: foo.parseArgs, foo.assertTrue]
+
 **Entry-point:** foo.parseArgs
 **Path:** parseArgs → bar
-[lots of UNRESOLVED noise]
+**Depth:** 12
+
+**Static slice (Tier 2):**
+
+arg0:
+  ← <UNRESOLVED: METHOD_CALL>
+
+**Differential matrix (5 representatives of 498):**
+
+| Test | Sliced args | Oracle |
+|---|---|---|
+| t1 | (<UNRESOLVED>) | returns 0 |
+
+**Behavior signals (from differential analysis):**
+- arg0_invariant_in_cluster: shared
 
 #### 4.4.1.b Cluster: foo.X path (302 chains)
-[more noise]
+
+**Entry-point:** foo.X
+**Path:** X → bar
+**Depth:** 8
+
+**Static slice (Tier 2):**
+
+arg0:
+  ← <UNRESOLVED: BRANCH_EXPLOSION>
 
 ## Long tail
 76 additional singletons.
@@ -59,12 +84,35 @@ _(reserved)_
 
 
 def test_strip_demo_drops_clusters_and_long_tail():
-    out = strip_demo(SAMPLE)
+    out = strip_demo(SAMPLE)  # default keep_chains="none"
     assert "#### 4.4.1.a" not in out
     assert "#### 4.4.1.b" not in out
     assert "UNRESOLVED" not in out
     assert "Long tail" not in out
     assert "Negative Memory" not in out
+
+
+def test_keep_chains_paths_keeps_headers_drops_noise():
+    out = strip_demo(SAMPLE, keep_chains="paths")
+    # cluster headers + paths kept
+    assert "#### 4.4.1.a Cluster: foo.parseArgs path (498 chains)" in out
+    assert "**Path:** parseArgs → bar" in out
+    # but the UNRESOLVED noise dropped
+    assert "UNRESOLVED" not in out
+    assert "[lots of UNRESOLVED noise]" not in out
+
+
+def test_keep_chains_full_keeps_everything():
+    out = strip_demo(SAMPLE, keep_chains="full")
+    assert "#### 4.4.1.a" in out
+    assert "#### 4.4.1.b" in out
+    assert "UNRESOLVED" in out  # full keeps the noise too
+
+
+def test_keep_chains_rejects_bad_value():
+    import pytest
+    with pytest.raises(ValueError, match="keep_chains"):
+        strip_demo(SAMPLE, keep_chains="bogus")
 
 
 def test_strip_demo_keeps_consumer_header_and_body_slice():

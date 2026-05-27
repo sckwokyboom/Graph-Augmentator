@@ -1,114 +1,130 @@
 """Strip a graph-tipper .budget.md to a compact, demo-ready format.
 
-Removes sections that look impressive but carry little signal for an LLM
-generating the target body:
+Always removes:
+  - `## Long tail` and `## Negative Memory` sections
+  - Joern-style type-signature lines above each sibling in Local Context
+    (e.g. `int(picocli.CommandLine$Help$Ansi$Text)`)
+  - chatty header metadata (`> Budget: ...`, `> Consumers: ...`)
 
-  - All path-cluster blocks (`#### 4.4.1.a..j Cluster: ...`) — they repeat
-    the same UNRESOLVED static slices 10 times for picocli/putValue.
-    Keeps the consumer header + body slice + implied requirements (the parts
-    that *do* help).
-  - `## Long tail` section.
-  - `## Negative Memory` (reserved placeholder).
-  - Joern-style type-signature lines that appear above each sibling
-    in Local Context (e.g. `int(picocli.CommandLine$Help$Ansi$Text)`).
-    They're for grep, not for humans.
-  - Metadata lines in the header (`> Budget: ...`, `> Consumers: ...`).
+Path-cluster handling is controlled by --keep-chains:
+  - none  (default): drop all `#### 4.4.1.x Cluster` blocks entirely. Keeps the
+            consumer header + body slice + implied requirements only.
+  - paths: keep each cluster's header + [hub] marker + Entry-point + Path + Depth,
+            but drop the Static slice / Differential matrix / Behavior signals
+            (the UNRESOLVED noise). Shows "GT mapped all call paths, ranked them"
+            without the visual clutter.
+  - full:  keep clusters verbatim.
 
-Input: path to a .budget.md (produced by `graph-tipper slice --no-current-body`)
-Output: writes `<input-stem>.demo.md` next to the input.
+Input: path to a .budget.md (produced by `graph-tipper slice --no-current-body`,
+optionally with `--katz-rank` so clusters are Katz-ordered).
+Output: writes `<input-stem>.demo.md` (or `.demo-<keep_chains>.md`) next to the input.
 
 Usage:
-    python -m harness.demo_format /tmp/gt-out/picocli-putvalue/abc.budget.md
+    python -m harness.demo_format /tmp/gt-out/.../abc.budget.md --keep-chains paths
 """
 import argparse
 import re
 import sys
 from pathlib import Path
 
+DROP_SECTIONS = {"Long tail", "Negative Memory"}
+HEADER_META = ("> Budget:", "> Consumers:", "> Direct tests:", "> Generated for:")
+# Markers that begin the noisy part of a cluster block (dropped in `paths` mode).
+CLUSTER_NOISE_MARKERS = ("**Static slice", "**Primary representative",
+                         "**Differential matrix", "**Behavior signals",
+                         "**+ ")
 
-def strip_demo(md: str) -> str:
+
+def strip_demo(md: str, keep_chains: str = "none") -> str:
+    if keep_chains not in ("none", "paths", "full"):
+        raise ValueError(f"keep_chains must be none|paths|full, got {keep_chains!r}")
     lines = md.splitlines()
     out: list[str] = []
 
-    # Pass 1: drop full sections (## Long tail, ## Negative Memory) and the
-    # cluster blocks (#### 4.4.1.a..j). Track section depth via headers.
-    drop_until_next_h2 = False
-    in_consumer_block = False
-    drop_until_next_h3_or_h2 = False
+    drop_section = False        # inside a ## section we drop entirely
+    cluster_state = None        # None | "keep" | "drop" | "paths"
+    cluster_suppress = False    # paths mode: past the **Static slice marker
 
-    i = 0
-    while i < len(lines):
-        line = lines[i]
-
-        # Drop chatty metadata in the header (between `# Graph-Tipper` and `## Target`).
-        if line.startswith("> Budget:") or line.startswith("> Consumers:") \
-                or line.startswith("> Direct tests:") or line.startswith("> Generated for:"):
-            i += 1
+    for line in lines:
+        # 1. Chatty header metadata.
+        if any(line.startswith(p) for p in HEADER_META):
             continue
 
-        # Section gating: ## headers.
+        # 2. ## section headers reset all nested state.
         if line.startswith("## "):
-            heading = line[3:].strip()
-            drop_until_next_h2 = heading in ("Long tail", "Negative Memory")
-            in_consumer_block = heading == "Consumer contracts"
-            drop_until_next_h3_or_h2 = False
-            if not drop_until_next_h2:
+            section = line[3:].strip()
+            drop_section = section in DROP_SECTIONS
+            cluster_state = None
+            cluster_suppress = False
+            if not drop_section:
                 out.append(line)
-            i += 1
             continue
 
-        if drop_until_next_h2:
-            i += 1
+        if drop_section:
             continue
 
-        # Inside Consumer contracts: drop the per-cluster `#### 4.4.1.x ...` blocks
-        # but keep the first consumer's body slice and implications.
-        if in_consumer_block and line.startswith("#### "):
-            drop_until_next_h3_or_h2 = True
-            i += 1
+        # 3. ### subsection ends any cluster.
+        if line.startswith("### "):
+            cluster_state = None
+            cluster_suppress = False
+            out.append(line)
             continue
 
-        if drop_until_next_h3_or_h2:
-            # Re-enable rendering at the next h3 or h2.
-            if line.startswith("### ") or line.startswith("## "):
-                drop_until_next_h3_or_h2 = False
-                # fall through to process this line normally
-            else:
-                i += 1
+        # 4. #### cluster header.
+        if line.startswith("#### "):
+            cluster_suppress = False
+            if keep_chains == "none":
+                cluster_state = "drop"
+                continue
+            elif keep_chains == "paths":
+                cluster_state = "paths"
+                out.append(line)
+                continue
+            else:  # full
+                cluster_state = "keep"
+                out.append(line)
                 continue
 
-        out.append(line)
-        i += 1
+        # 5. Cluster body.
+        if cluster_state == "drop":
+            continue
+        if cluster_state == "paths":
+            stripped = line.strip()
+            if any(stripped.startswith(m) for m in CLUSTER_NOISE_MARKERS):
+                cluster_suppress = True
+            if cluster_suppress:
+                continue
+            out.append(line)
+            continue
+        # cluster_state in (None, "keep"): fall through to normal handling.
 
-    # Pass 2: in Local Context → Sibling members, strip Joern-style type signatures.
-    # Pattern: a line that LOOKS like `<return-type>(<param-types>)` with no body, no
-    # Java keywords. We detect these as lines whose stripped form matches /^[\w$.\[\]]+\([^)]*\)$/
-    # AND that don't look like a real Java declaration (no `public/private/protected/static`,
-    # no trailing `{`).
+        out.append(line)
+
+    out = _strip_joern_type_sigs(out)
+    return _collapse_blanks(out)
+
+
+def _strip_joern_type_sigs(lines: list[str]) -> list[str]:
+    """In Local Context → Sibling members, drop Joern-style type-signature header lines."""
     type_sig_re = re.compile(r"^[\w$.\[\]]+\([^)]*\)$")
     java_keywords = ("public ", "private ", "protected ", "static ", "@", "void ",
                      "final ", "abstract ", "synchronized ", "default ")
-
-    cleaned: list[str] = []
-    in_sibling_section = False
+    out: list[str] = []
+    in_siblings = False
     in_code_fence = False
-
-    for line in out:
-        # Track ### Sibling members
+    for line in lines:
         if line.startswith("### Sibling members used by target"):
-            in_sibling_section = True
-            cleaned.append(line)
+            in_siblings = True
+            out.append(line)
             continue
-        if in_sibling_section and (line.startswith("### ") or line.startswith("## ")):
-            in_sibling_section = False
-            cleaned.append(line)
+        if in_siblings and (line.startswith("### ") or line.startswith("## ")):
+            in_siblings = False
+            out.append(line)
             continue
-
-        if in_sibling_section:
-            # Track code-fence depth so we strip type-sigs only inside the ```java block.
+        if in_siblings:
             if line.startswith("```"):
                 in_code_fence = not in_code_fence
-                cleaned.append(line)
+                out.append(line)
                 continue
             if in_code_fence:
                 stripped = line.strip()
@@ -116,28 +132,31 @@ def strip_demo(md: str) -> str:
                         and not any(stripped.startswith(kw) for kw in java_keywords)
                         and not stripped.endswith("{")
                         and not stripped.endswith(";")):
-                    # Type-signature header line — drop.
                     continue
-        cleaned.append(line)
+        out.append(line)
+    return out
 
-    # Pass 3: collapse runs of blank lines.
+
+def _collapse_blanks(lines: list[str]) -> str:
     final: list[str] = []
     prev_blank = False
-    for line in cleaned:
+    for line in lines:
         is_blank = (line.strip() == "")
         if is_blank and prev_blank:
             continue
         final.append(line)
         prev_blank = is_blank
-
     return "\n".join(final).rstrip() + "\n"
 
 
 def main():
-    p = argparse.ArgumentParser(description=__doc__)
+    p = argparse.ArgumentParser(description=__doc__,
+                                formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("budget_md", type=Path, help="Path to .budget.md from graph-tipper slice")
+    p.add_argument("--keep-chains", choices=["none", "paths", "full"], default="none",
+                   help="How much of the path-cluster blocks to keep (default: none)")
     p.add_argument("--out", type=Path, default=None,
-                   help="Output path (default: <stem>.demo.md next to input)")
+                   help="Output path (default: <stem>.demo.md, or .demo-<mode>.md if not 'none')")
     args = p.parse_args()
 
     if not args.budget_md.exists():
@@ -145,17 +164,19 @@ def main():
         sys.exit(1)
 
     md = args.budget_md.read_text()
-    cleaned = strip_demo(md)
+    cleaned = strip_demo(md, keep_chains=args.keep_chains)
 
     out_path = args.out
     if out_path is None:
         stem = args.budget_md.name.replace(".budget.md", "")
-        out_path = args.budget_md.parent / f"{stem}.demo.md"
+        suffix = ".demo.md" if args.keep_chains == "none" else f".demo-{args.keep_chains}.md"
+        out_path = args.budget_md.parent / f"{stem}{suffix}"
 
     out_path.write_text(cleaned)
     in_tokens = len(md) // 4
     out_tokens = len(cleaned) // 4
-    print(f"wrote {out_path} ({out_tokens} tokens ≈ {in_tokens - out_tokens} fewer than input)")
+    print(f"wrote {out_path} ({out_tokens} tokens, keep-chains={args.keep_chains}, "
+          f"{in_tokens - out_tokens} fewer than input)")
 
 
 if __name__ == "__main__":
