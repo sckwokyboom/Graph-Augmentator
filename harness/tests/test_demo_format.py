@@ -34,7 +34,7 @@ void caller() { bar(1); }
 
 [hub: foo.parseArgs, foo.assertTrue]
 
-**Entry-point:** foo.parseArgs
+**Entry-point:** `foo.parseArgs`
 **Path:** parseArgs → bar
 **Depth:** 12
 
@@ -56,7 +56,7 @@ arg0:
 
 #### 4.4.1.b Cluster: foo.X path (302 chains)
 
-**Entry-point:** foo.X
+**Entry-point:** `foo.X`
 **Path:** X → bar
 **Depth:** 8
 
@@ -111,6 +111,40 @@ def test_keep_chains_paths_keeps_representative_test_pointer():
     # but the differential matrix table itself is gone
     assert "Differential matrix" not in out
     assert "| t1 |" not in out
+
+
+def test_keep_chains_paths_snippets_injects_callsite_fragments():
+    chains = [
+        {
+            "test": {"fqn": "foo.FooTest.testThing"},
+            "steps": [
+                {"callerFqn": "foo.FooTest.testThing", "calleeFqn": "foo.parseArgs",
+                 "snippet": "void testThing() { parseArgs(\"-a\"); }"},
+                {"callerFqn": "foo.parseArgs", "calleeFqn": "foo.bar",
+                 "snippet": "void parseArgs(String a) { bar(a); }"},
+            ],
+        },
+    ]
+    out = strip_demo(SAMPLE, keep_chains="paths+snippets", chains=chains, chain_hops=3)
+    # call-site section injected under the matching cluster
+    assert "Call-sites" in out
+    assert "void parseArgs(String a) { bar(a); }" in out
+    assert "parseArgs → bar" in out
+
+
+def test_keep_chains_paths_snippets_dedups_shared_edges():
+    # Two clusters whose representative chains share the same final edge -> snippet once,
+    # second occurrence is a back-reference.
+    sample = SAMPLE  # 4.4.1.a (FooTest.testThing) ; 4.4.1.b has no representative -> only a matches
+    chains = [
+        {"test": {"fqn": "foo.FooTest.testThing"},
+         "steps": [
+             {"callerFqn": "foo.X", "calleeFqn": "foo.bar", "snippet": "shared tail"},
+         ]},
+    ]
+    out = strip_demo(sample, keep_chains="paths+snippets", chains=chains, chain_hops=1)
+    # only one snippet body even though edge could recur
+    assert out.count("shared tail") == 1
 
 
 def test_keep_chains_full_keeps_everything():
