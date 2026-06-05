@@ -25,6 +25,10 @@ public final class MarkdownRenderer {
             return sb.toString();
         }
 
+        if (options != null && options.specMode()) {
+            return renderSpec(sb, a);
+        }
+
         String maxLabel = budget.max() == Integer.MAX_VALUE ? "unlimited" : Integer.toString(budget.max());
         int consumerCount = a.consumers().size();
         int clusterCount = a.consumers().stream().mapToInt(c -> c.clusters().size()).sum();
@@ -116,6 +120,69 @@ public final class MarkdownRenderer {
         if (!suppressCurrentBody && a.currentBody() != null && !a.currentBody().isBlank()) {
             sb.append("**Current body:**\n```java\n").append(a.currentBody()).append("\n```\n\n");
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // Spec mode (§ --spec): target + scoped test command + behavioral examples
+    // + return contract + trimmed helpers. No call-path clusters.
+    // -----------------------------------------------------------------------
+
+    private String renderSpec(StringBuilder sb, Artifact a) {
+        sb.append("> Mode: spec\n\n");
+        renderTarget(sb, a);
+
+        // How to verify — scoped test command over the test classes that reach the target.
+        var classes = reachingTestClasses(a);
+        sb.append("## How to verify (run ONLY these — they pin this method's behavior)\n\n");
+        sb.append("```\n./gradlew test");
+        for (String c : classes) sb.append(" \\\n  --tests ").append(c);
+        sb.append("\n```\n\n");
+
+        // Behavioral spec — input→output examples (direct + owner-class unit tests).
+        sb.append("## Behavioral spec (input → expected output)\n\n");
+        if (a.directTests().isEmpty() && a.behavioralTests().isEmpty()) {
+            sb.append("_(no test examples resolved)_\n\n");
+        } else {
+            for (var t : a.directTests())     renderTestExample(sb, t, "direct");
+            for (var t : a.behavioralTests()) renderTestExample(sb, t, "behavioral");
+        }
+
+        renderReturnContract(sb, a);
+        return sb.toString();
+    }
+
+    private static java.util.List<String> reachingTestClasses(Artifact a) {
+        var set = new java.util.LinkedHashSet<String>();
+        for (var t : a.directTests())     set.add(classFqnOf(t.testMethod().fqn()));
+        for (var t : a.behavioralTests()) set.add(classFqnOf(t.testMethod().fqn()));
+        set.remove("");
+        return new java.util.ArrayList<>(set);
+    }
+
+    private static String classFqnOf(String methodFqn) {
+        if (methodFqn == null) return "";
+        int dot = methodFqn.lastIndexOf('.');
+        return dot < 0 ? methodFqn : methodFqn.substring(0, dot);
+    }
+
+    private void renderTestExample(StringBuilder sb, com.graphtipper.slice.DirectTest t, String kind) {
+        var m = t.testMethod();
+        sb.append("### ").append(m.fqn()).append("  [").append(kind).append("]\n");
+        sb.append("Oracle: ").append(renderOracle(t.oracle())).append("\n\n");
+        sb.append("```java\n// ").append(m.file()).append(":").append(m.lineStart()).append("\n");
+        sb.append(t.snippet() == null || t.snippet().isBlank() ? "(snippet unavailable)" : t.snippet());
+        sb.append("\n```\n\n");
+    }
+
+    private void renderReturnContract(StringBuilder sb, Artifact a) {
+        if (a.consumers().isEmpty()) return;
+        var c = a.consumers().get(0);
+        if (c.implications() == null || c.implications().isEmpty()) return;
+        sb.append("## Return-value contract (from consumer ").append(c.consumerFqn()).append(")\n\n");
+        for (var imp : c.implications()) {
+            sb.append("- ").append(imp.text()).append("\n");
+        }
+        sb.append("\n");
     }
 
     private void renderDirectTests(StringBuilder sb, Artifact a) {

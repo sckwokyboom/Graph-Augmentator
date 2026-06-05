@@ -92,6 +92,12 @@ public final class SliceCommand implements Callable<Integer> {
                     + "the body from scratch — otherwise the reference implementation leaks.")
     boolean noCurrentBody;
 
+    @Option(names = "--spec",
+            description = "Spec-anchored mode: target signature + scoped test command + "
+                    + "behavioral input→output examples (direct tests + owner-class unit tests) + "
+                    + "return contract. Drops call-path clusters. Implies --no-current-body.")
+    boolean specMode;
+
     @Override
     public Integer call() {
         try {
@@ -240,7 +246,9 @@ public final class SliceCommand implements Callable<Integer> {
             var unlimitedBudget = new TokenBudget(Integer.MAX_VALUE);
             new BudgetPlanner(unlimitedBudget).planNoEvict(fullArtifact);
 
-            RenderOptions opts = RenderOptions.defaults().withBare(bare).withNoCurrentBody(noCurrentBody);
+            RenderOptions opts = RenderOptions.defaults().withBare(bare)
+                    .withNoCurrentBody(noCurrentBody || specMode)
+                    .withSpecMode(specMode);
             if (pruneByCoverage != null) {
                 var report = com.graphtipper.slice.JacocoExecReport.fromXml(pruneByCoverage);
                 String tgtPkgFile = packageQualifiedSourcePath(targetMethod);
