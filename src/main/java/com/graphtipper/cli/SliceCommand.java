@@ -171,6 +171,39 @@ public final class SliceCommand implements Callable<Integer> {
                 }
             }
 
+            // Behavioral (indirect) tests for --spec mode: unit tests of the target's OWNER
+            // class that assert on observable output. These pin behavior the direct tests miss
+            // (e.g. SPAN/WRAP rendering of TextTable.putValue). Body-agnostic signal: the test
+            // lives in a class named after the owner class AND its source asserts on the owner.
+            var behavioralTests = new java.util.ArrayList<DirectTest>();
+            if (specMode) {
+                String ownerFqn = targetFqn.contains(".")
+                        ? targetFqn.substring(0, targetFqn.lastIndexOf('.')) : targetFqn;
+                String ownerSimple = innermostSimpleName(ownerFqn);   // e.g. CommandLine$Help$TextTable → TextTable
+                var seenBehavioral = new java.util.HashSet<String>();
+                for (var chain : enriched) {
+                    if (chain.steps().size() < 2) continue;           // indirect only
+                    var test = chain.test();
+                    if (test.file() == null) continue;
+                    String tFqn = test.fqn();
+                    if (!seenBehavioral.add(tFqn)) continue;
+                    String testClassSimple = innermostSimpleName(
+                            tFqn.contains(".") ? tFqn.substring(0, tFqn.lastIndexOf('.')) : tFqn);
+                    if (!testClassSimple.startsWith(ownerSimple)) continue;  // e.g. TextTableTest → TextTable
+                    var tPath = java.nio.file.Paths.get(project.toString(), test.file());
+                    String snippet = snippetExtractor.sliceTestMethodRelevantRegion(tPath, tFqn);
+                    if (snippet == null || !snippet.contains("assert") || !snippet.contains(ownerSimple)) {
+                        continue;
+                    }
+                    behavioralTests.add(new DirectTest(test, java.util.List.of(),
+                            oracleExtractor.primaryFor(tPath, tFqn, targetFqn), snippet));
+                }
+                behavioralTests.sort(java.util.Comparator.comparingInt(t -> t.snippet().length()));
+                if (behavioralTests.size() > 6) {
+                    behavioralTests = new java.util.ArrayList<>(behavioralTests.subList(0, 6));
+                }
+            }
+
             var enricher = noSlice
                     ? new ClusterEnricher(oracleExtractor)
                     : new ClusterEnricher(oracleExtractor, sliceDepth, sliceBranches);
@@ -206,13 +239,15 @@ public final class SliceCommand implements Callable<Integer> {
             }
 
             var v2Artifact = new Artifact(targetMethod, currentBody, enriched,
-                    directTests, consumers, singletonClusters, chainResult.truncated(), lc);
+                    directTests, consumers, singletonClusters, chainResult.truncated(), lc)
+                    .withBehavioralTests(behavioralTests);
 
             var fullArtifact = v2Artifact;
 
             var topChains = enriched.subList(0, Math.min(maxChains, enriched.size()));
             var budgetArtifactInitial = new Artifact(targetMethod, currentBody, topChains,
-                    directTests, consumers, singletonClusters, chainResult.truncated(), lc);
+                    directTests, consumers, singletonClusters, chainResult.truncated(), lc)
+                    .withBehavioralTests(behavioralTests);
 
             var graphArtifact = new Artifact(targetMethod, currentBody, topChains,
                     directTests, consumers, singletonClusters, chainResult.truncated(), lc);
@@ -309,6 +344,13 @@ public final class SliceCommand implements Callable<Integer> {
     private static String simpleNameOf(String fqn) {
         int lastDot = fqn.lastIndexOf('.');
         return lastDot < 0 ? fqn : fqn.substring(lastDot + 1);
+    }
+
+    /** Innermost simple name: strips both package ('.') and nesting ('$') separators.
+     *  e.g. "picocli.CommandLine$Help$TextTable" → "TextTable". */
+    private static String innermostSimpleName(String fqn) {
+        int sep = Math.max(fqn.lastIndexOf('.'), fqn.lastIndexOf('$'));
+        return sep < 0 ? fqn : fqn.substring(sep + 1);
     }
 
     private java.nio.file.Path resolveSourceFile(java.nio.file.Path projectRoot, String consumerFqn,
