@@ -36,11 +36,23 @@ class MarkdownRendererSpecTest {
                 new Oracle.Equals("\" <query>  ...\"", "tt.toString()"),
                 "void addRowValues() { tt.addRowValues(\"<query>\", \"long...\"); assertEquals(\"...\", tt.toString()); }");
 
+        var keepHelper = new LocalContext.SiblingMember(
+                "int()", null, "public int rowCount() { return columnValues.size() / columns.length; }",
+                false, "src/main/java/p/CommandLine.java", 200, 200);
+        var deprecatedFactory = new LocalContext.SiblingMember(
+                "p.TextTable(p.Ansi,int)", null,
+                "@Deprecated public static TextTable forDefaultColumns(Ansi ansi, int w) { return null; }",
+                false, "src/main/java/p/CommandLine.java", 210, 212);
+        var staticFactory = new LocalContext.SiblingMember(
+                "p.TextTable(p.ColorScheme)", null,
+                "public static TextTable forColumns(ColorScheme cs, Column... cols) { return null; }",
+                false, "src/main/java/p/CommandLine.java", 220, 222);
+
         var artifact = new Artifact(target(), "void putValue(){}",
                 List.<com.graphtipper.slice.Chain>of(),
                 List.of(direct), List.of(behavioral),
                 List.of(), List.of(), false,
-                new LocalContext(List.of(), List.of()));
+                new LocalContext(List.of(keepHelper, deprecatedFactory, staticFactory), List.of()));
 
         String md = new MarkdownRenderer(RenderOptions.defaults().withSpecMode(true))
                 .render(artifact, new TokenBudget(20_000), "sha", "demo");
@@ -64,5 +76,11 @@ class MarkdownRendererSpecTest {
         // spec mode drops the call-path clusters and the chatty budget header
         assertThat(md).doesNotContain("#### 4.4.1");
         assertThat(md).doesNotContain("Path clusters:");
+
+        // helpers: keep instance method (with body), drop @Deprecated + static factories
+        assertThat(md).contains("## Helpers available on the owner class");
+        assertThat(md).contains("public int rowCount()");
+        assertThat(md).doesNotContain("forDefaultColumns");
+        assertThat(md).doesNotContain("forColumns");
     }
 }

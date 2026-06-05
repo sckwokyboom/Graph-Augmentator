@@ -148,7 +148,45 @@ public final class MarkdownRenderer {
         }
 
         renderReturnContract(sb, a);
+        renderHelpers(sb, a);
         return sb.toString();
+    }
+
+    /**
+     * Owner-class members the target is likely to need, minus noise. Body-agnostic trim:
+     * drops {@code @Deprecated} members and {@code static} factories (a data-structure class's
+     * static methods are almost always factories/utilities, not what an instance method calls).
+     * Keeps instance methods (with bodies — the bodies carry semantics like
+     * {@code rowCount() = columnValues.size()/columns.length}) and field declarations.
+     */
+    private void renderHelpers(StringBuilder sb, Artifact a) {
+        var siblings = a.localContext() == null ? null : a.localContext().siblings();
+        if (siblings == null || siblings.isEmpty()) return;
+        var kept = new java.util.ArrayList<com.graphtipper.slice.LocalContext.SiblingMember>();
+        for (var s : siblings) {
+            String decl = firstNonBlankLine(s.body());
+            if (decl.contains("@Deprecated")) continue;
+            if (decl.contains(" static ")) continue;          // factories / static utils
+            kept.add(s);
+        }
+        if (kept.isEmpty()) return;
+        sb.append("## Helpers available on the owner class\n\n```java\n");
+        for (var s : kept) {
+            if (s.body() != null && !s.body().isBlank()) {
+                sb.append(s.body()).append("\n");
+            } else {
+                sb.append(s.signature()).append("\n");        // fields: no body
+            }
+        }
+        sb.append("```\n\n");
+    }
+
+    private static String firstNonBlankLine(String body) {
+        if (body == null) return "";
+        for (String line : body.split("\n", -1)) {
+            if (!line.isBlank()) return line.strip();
+        }
+        return "";
     }
 
     private static java.util.List<String> reachingTestClasses(Artifact a) {
