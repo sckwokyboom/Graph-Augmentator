@@ -30,7 +30,10 @@ def _executed_tests(picocli_dir: Path) -> set:
     out = set()
     for fp in glob.glob(str(picocli_dir / "build/test-results/test/TEST-*.xml")):
         for tc in ET.parse(fp).getroot().iter("testcase"):
-            out.add(f"{tc.get('classname')}.{tc.get('name').split('[')[0]}")
+            name = (tc.get("name") or "").split("[")[0]
+            cls = tc.get("classname") or ""
+            if name and cls:
+                out.add(f"{cls}.{name}")
     return out
 
 
@@ -38,7 +41,8 @@ def build(gt: Path, out: Path):
     out.mkdir(parents=True, exist_ok=True)
     executed = _executed_tests(gt / "picocli")
     # probe frames are "class#method"; normalize to "class.method" and keep only real tests
-    frames = {l.strip().replace("#", ".") for l in (gt / "C_putvalue.txt").read_text().splitlines() if l.strip()}
+    frames = {line.strip().replace("#", ".")
+              for line in (gt / "C_putvalue.txt").read_text().splitlines() if line.strip()}
     cov_tests = sorted(frames & executed)
     (out / "coverage.json").write_text(json.dumps({PUTVALUE: cov_tests}, indent=0))
 
@@ -46,7 +50,7 @@ def build(gt: Path, out: Path):
     regions = []
     for f, label in _MUTANTS.items():
         p = gt / f"kill_{f}.txt"
-        ks = {l.strip() for l in p.read_text().splitlines() if l.strip()} if p.exists() else set()
+        ks = {line.strip() for line in p.read_text().splitlines() if line.strip()} if p.exists() else set()
         killers_union |= ks
         regions.append({"label": label, "lines": [0, 0], "killers": len(ks)})
     (out / "mutation.json").write_text(json.dumps(

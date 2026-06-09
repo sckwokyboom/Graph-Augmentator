@@ -58,4 +58,13 @@ def compute_impact(changed: set, cov: Coverage, mut: Mutation) -> ImpactResult:
 
     tier1 = affected & killers
     tier2 = affected - tier1
+    # Killers not present in the coverage matrix mean the mutation map and coverage map
+    # disagree (they come from different producers — PITest vs JaCoCo). Surface it rather
+    # than silently dropping those killers from both tiers.
+    orphans = killers - affected
+    if orphans:
+        blind.append(BlindSpot(
+            "coverage/mutation mismatch",
+            f"{len(orphans)} killer test(s) are not in the coverage matrix "
+            f"(artifacts out of sync) — e.g. {', '.join(sorted(orphans)[:3])}"))
     return ImpactResult(changed, affected, tier1, tier2, regions, blind)

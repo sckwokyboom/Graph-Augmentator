@@ -1,7 +1,11 @@
 import re
 from harness.impact.artifacts import MethodIndex
 
-_FILE_RE = re.compile(r"^\+\+\+ b/(.+)$")
+# Tolerate: optional `b/` prefix (git default) or none (`--no-prefix`/plain unified),
+# and a trailing tab/whitespace git appends when the path contains spaces. A greedy
+# `.+` would swallow that tab into the path → a silent total miss (empty report that
+# looks like "nothing affected"), so match non-greedily up to optional trailing ws.
+_FILE_RE = re.compile(r"^\+\+\+ (?:b/)?(.+?)\s*$")
 _HUNK_RE = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@")
 
 

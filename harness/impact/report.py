@@ -39,8 +39,13 @@ def render_report(r: ImpactResult, total_tests: int) -> str:
             out.append(f"- **{b.label}**: {b.detail}")
         out.append("")
 
-    out.append(f"## Affected tests (coverage-sound: {len(r.affected)} of {total_tests}; "
-               f"the other {total_tests - len(r.affected)} do not touch changed code → skip)\n")
+    # Only show the "of N / other M skip" economy when total_tests is a sane upper bound
+    # (>= affected); otherwise (e.g. unset/0) it would print a negative "other" count.
+    if total_tests >= len(r.affected):
+        out.append(f"## Affected tests (coverage-sound: {len(r.affected)} of {total_tests}; "
+                   f"the other {total_tests - len(r.affected)} do not touch changed code → skip)\n")
+    else:
+        out.append(f"## Affected tests (coverage-sound: {len(r.affected)})\n")
     out.append(f"### Tier 1 — VERIFIERS ({len(r.tier1)}) — run every iteration")
     out.append("```\n" + _scoped_command(r.tier1) + "\n```")
     out.append(f"### Tier 2 — COVERERS ({len(r.tier2)}) — run at final validation only")
