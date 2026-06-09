@@ -12,6 +12,12 @@ public record LocalContext(
         siblings = List.copyOf(siblings);
         usedTypes = List.copyOf(usedTypes);
     }
-    public record SiblingMember(String signature, String javadoc, String body, boolean truncated) {}
+    public record SiblingMember(String signature, String javadoc, String body, boolean truncated,
+                                 String file, int lineStart, int lineEnd) {
+        /** Legacy 4-arg constructor for callers that don't track source location yet. */
+        public SiblingMember(String signature, String javadoc, String body, boolean truncated) {
+            this(signature, javadoc, body, truncated, null, -1, -1);
+        }
+    }
     public record UsedType(Node.Type type, List<String> publicMethodSignatures) {}
 }

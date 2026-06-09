@@ -138,8 +138,10 @@ class MarkdownRendererTest {
         String md = new MarkdownRenderer().render(artifact, budget, "abc", "proj");
         assertThat(md).contains("Cluster: CommandLine.parseArgs path");
         assertThat(md).contains("Depth:** 5");
-        // Path renders with method-name compression: two consecutive "parse" → "parse(×2)"
-        assertThat(md).contains("parse(×2)");
+        // Path collapses consecutive identical method names to a single occurrence (no count):
+        // CommandLine.parse, CommandLine.parse → CommandLine.parse (once).
+        assertThat(md).contains("CommandLine.parseArgs → CommandLine.parse → TextTable.addRowValues → putValue");
+        assertThat(md).doesNotContain("(×");
         assertThat(md).contains("ArgGroupTest.testRequired");
         // Differential matrix
         assertThat(md).contains("Differential matrix");

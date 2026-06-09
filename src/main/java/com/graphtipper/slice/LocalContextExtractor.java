@@ -80,7 +80,9 @@ public final class LocalContextExtractor {
             body = reader.readLines(m.file(), m.lineStart(), m.lineStart() + 9) + "\n// ...";
             truncated = true;
         }
-        return new LocalContext.SiblingMember(m.signature(), m.javadoc(), body, truncated);
+        return new LocalContext.SiblingMember(
+                m.signature(), m.javadoc(), body, truncated,
+                m.file(), m.lineStart(), m.lineEnd());
     }
 
     private List<LocalContext.UsedType> collectUsedTypes(ProjectGraph g, Node.Method target) {
