@@ -6,10 +6,24 @@
 # afterTest dumps+resets that test's exec via the JaCoCo remote-control protocol;
 # offline jacococli converts each .exec → XML.
 #
-# STATUS: scaffold. The afterTest → dump timing, the agent jar path, and the
-# tcpserver dump protocol are validated against the installed JaCoCo version and
-# the target project's build. For picocli specifically, the measured per-test
-# coverage of putValue (~412 covering tests) is the validation target.
+# STATUS: tcpserver mechanism is RACY — DO NOT USE for fast suites. Verified
+# 2026-06-09 on picocli: the JaCoCo agent IS attached to the test worker JVM
+# (confirmed in allJvmArgs), but `jacococli dump` (cold JVM, ~1s startup) spawned
+# from gradle's async afterTest connects only AFTER the worker JVM has finished its
+# (sub-100ms) tests and exited → "Connection refused", zero exec files.
+#
+# ROOT CAUSE: per-test dump runs cross-process (gradle daemon) and loses the race
+# against worker shutdown for fast tests.
+#
+# ROBUST PATH (recommended): in-JVM per-test capture. The validated approach is the
+# stack-probe (CoverageProbe: on method entry, walk the stack for the test frame) —
+# it gave recall 100% / the 412 figure for putValue with zero race because it runs
+# inside the worker. Generalize it to an all-methods java-agent (ByteBuddy MethodEntry
+# advice + stack test-attribution + dump matrix on JVM shutdown). That is the next
+# focused spike; this tcpserver script is kept only as a record of the dead end.
+#
+# Usage: PROJECT=~/gt-eval/picocli JACOCO_AGENT=/path/jacocoagent.jar \
+#        JACOCO_CLI=/path/jacococli.jar ./run_coverage.sh <out-dir>
 #
 # Usage: PROJECT=~/gt-eval/picocli JACOCO_AGENT=/path/jacocoagent.jar \
 #        JACOCO_CLI=/path/jacococli.jar ./run_coverage.sh <out-dir>
