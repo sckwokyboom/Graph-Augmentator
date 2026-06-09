@@ -48,4 +48,19 @@ the old source-probe shutdown hook clobbers to 4 lines.
 - The parser (`../coverage_agent_parse.py`) can intersect with `executed_tests.txt`
   (gradle-collected, diagnostic) via `attribution=outer executed=<file>` if a project's
   stacks ever surface non-`@Test` outermost frames (`@Before`/setup). Not needed for picocli.
-```
+
+## Dynamic value capture (generation artifact)
+Records a small sample of `args → return/exception` for a target method, to supply the
+behavioural examples static slicing leaves UNRESOLVED. Attach with `capture=<pkg.Class.method>`:
+
+    -javaagent:gtcov-agent.jar=out=/tmp/gtcap,capture=picocli.CommandLine$Help$TextTable.putValue
+
+Dumps `values.<pid>.tsv` (`method \t a0 | a1 | … \t => result`); objects with a default
+`toString` are field-dumped (`Cell{column=1, row=3}`); independent caps keep both returns
+and an exception example. Parse + render into the generation artifact:
+
+    python3 -m harness.impact.gen_artifact --budget <slice.budget.md> \
+        --values /tmp/gtcap --target '<pkg.Class.method>' --out gen.md
+
+These examples are **observed baseline behaviour, NOT an oracle** — valid as reference only
+in masked-method regeneration (original == reference). In bug-fixing they may reflect the bug.
