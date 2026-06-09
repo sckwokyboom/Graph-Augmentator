@@ -1,29 +1,34 @@
 #!/usr/bin/env bash
-# [INTEGRATION SCAFFOLD] PITest mutation run for one target class → mutations.xml
-#   (consumed by mutation_parse.py)
+# PITest mutation run for one target class → mutations.xml + mutation.json.
+# The PITest gradle plugin is applied via an init script (no edit to the project build).
 #
-# STATUS: scaffold. Requires the PITest gradle plugin (info.solidsoft.pitest) applied
-# to the project, OR the pitest-command-line jar with the project's compiled classpath.
-# Validate on picocli: confirm putValue mutants are generated. PITest's systematic
-# mutants will differ from the 4 hand-mutants (kill count ≠ 309 — expected, more thorough).
+# Usage:
+#   PROJECT=~/gt-eval/picocli \
+#   [TARGET_TESTS='picocli.HelpTest;picocli.TextTableTest'] \
+#   bash harness/impact/producers/run_mutation.sh 'picocli.CommandLine$Help$TextTable' <out-dir>
 #
-# Usage: PROJECT=~/gt-eval/picocli ./run_mutation.sh "picocli.CommandLine\$Help\$TextTable" <out-dir>
+# PITest's systematic mutants differ from the 4 hand-mutants (kill count != 309 — expected,
+# PITest is more thorough). Validation criterion: putValue gets a non-zero killer count.
 set -euo pipefail
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT="${PROJECT:?set PROJECT}"
 TARGET_CLASS="${1:?target class (e.g. picocli.CommandLine\$Help\$TextTable)}"
 OUT="${2:?out dir}"
-mkdir -p "$OUT"
+TARGET_TESTS="${TARGET_TESTS:-picocli.*}"
+OUT="$(mkdir -p "$OUT" && cd "$OUT" && pwd)"
 
-( cd "$PROJECT" && ./gradlew pitest \
-    -Ppitest.targetClasses="$TARGET_CLASS" \
-    -Ppitest.outputFormats=XML --console=plain )
+echo "[run_mutation] PITest on $TARGET_CLASS* (tests: $TARGET_TESTS)"
+( cd "$PROJECT" && \
+  PIT_TARGET_CLASSES="${TARGET_CLASS}*" \
+  PIT_TARGET_TESTS="$TARGET_TESTS" \
+  ./gradlew :pitest --init-script "$HERE/pitest-init.gradle" --console=plain ) || true
 
-# PITest writes build/reports/pitest/**/mutations.xml (timestamped dir)
-found="$(find "$PROJECT/build/reports/pitest" -name "mutations.xml" 2>/dev/null | head -1)"
+found="$(find "$PROJECT/build/reports/pitest" -name 'mutations.xml' 2>/dev/null | head -1)"
 if [ -z "$found" ]; then
-  echo "ERROR: no mutations.xml produced. Is the PITest gradle plugin applied?" >&2
+  echo "ERROR: no mutations.xml produced (did the :pitest task run?)" >&2
   exit 1
 fi
 cp "$found" "$OUT/mutations.xml"
-echo "[run_mutation] wrote $OUT/mutations.xml"
-echo "Next: python3 -m harness.impact.producers.mutation_parse $OUT/mutations.xml mutation.json"
+PYTHONPATH="$HERE/../../.." python3 -m harness.impact.producers.mutation_parse \
+    "$OUT/mutations.xml" "$OUT/mutation.json"
+echo "[run_mutation] wrote $OUT/mutations.xml and $OUT/mutation.json"
