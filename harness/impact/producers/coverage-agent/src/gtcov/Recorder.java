@@ -23,37 +23,33 @@ public final class Recorder {
     /** Deduped matrix rows: methodFqn \t testFqn \t kind. */
     private static final Set<String> MATRIX = ConcurrentHashMap.newKeySet();
 
+    /** Project package prefix (tests + source live here). Set by the agent premain. */
+    private static final String PKG = System.getProperty("gtcov.pkg", "picocli.");
+
     static {
         Runtime.getRuntime().addShutdownHook(new Thread(Recorder::dump, "gtcov-dump"));
     }
 
     private Recorder() {}
 
-    private static boolean isTestClass(String c) {
-        return c.startsWith("picocli.") && c.contains("Test");
-    }
-
     /** Called (inlined) at the entry of every instrumented method. methodFqn is the
      *  canonical "package.Outer$Nested.method" (no signature). */
     public static void record(String methodFqn) {
         StackTraceElement[] st = Thread.currentThread().getStackTrace();
         // Stack is most-recent-first: index 0 is Thread.getStackTrace, low indices are
-        // the instrumented method + callees, high indices are the test/runner side.
-        // The outermost *Test frame (highest index, found first scanning from the bottom)
-        // is the @Test method that drove this call.
-        int outerIdx = -1;
+        // the instrumented method + its callees, high indices are the test/runner side.
+        // The OUTERMOST project-package frame (highest index = closest to the JUnit runner,
+        // found first scanning from the bottom) is the test entry point that drove this
+        // call: source frames are always deeper than the test that calls them, and JUnit /
+        // gradle frames are not in the project package. No class-name heuristic needed —
+        // this captures tests whose class name has no "Test" in it (e.g. picocli.Issue1351).
         for (int i = st.length - 1; i >= 0; i--) {
-            if (isTestClass(st[i].getClassName())) { outerIdx = i; break; }
-        }
-        if (outerIdx < 0) {
-            return; // no test frame on stack (e.g. static-init / non-test call); skip
-        }
-        MATRIX.add(methodFqn + "\t" + testFqn(st[outerIdx]) + "\touter");
-        for (int i = 0; i < outerIdx; i++) {
-            if (isTestClass(st[i].getClassName())) {
-                MATRIX.add(methodFqn + "\t" + testFqn(st[i]) + "\tinner");
+            if (st[i].getClassName().startsWith(PKG)) {
+                MATRIX.add(methodFqn + "\t" + testFqn(st[i]) + "\touter");
+                return;
             }
         }
+        // No project-package frame on the stack (e.g. static-init / non-test call); skip.
     }
 
     private static String testFqn(StackTraceElement e) {

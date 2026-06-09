@@ -34,6 +34,9 @@ public final class Agent {
         String out = cfg.getOrDefault("out", "./gtcov-out");
         new File(out).mkdirs();
         System.setProperty("gtcov.out", out);
+        // Project package prefix (tests + source). The Recorder picks the outermost frame
+        // in this package as the driving test. Defaults to picocli for the validation.
+        System.setProperty("gtcov.pkg", cfg.getOrDefault("pkg", "picocli."));
 
         // Make gtcov.Recorder visible to ALL classloaders (the inlined advice calls it).
         File self = new File(Agent.class.getProtectionDomain().getCodeSource().getLocation().toURI());
