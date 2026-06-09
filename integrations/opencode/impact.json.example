@@ -1,0 +1,8 @@
+{
+  "_comment": "Copy to <project>/.opencode/impact.json. Artifact paths are resolved relative to THIS file's directory (or use absolute paths). harness_path is the Graph-Tipper repo root (the dir containing the `harness/` package).",
+  "harness_path": "/absolute/path/to/Graph-Tipper",
+  "methods": "../.impact/methods.json",
+  "coverage": "../.impact/coverage.json",
+  "mutation": "../.impact/mutation.json",
+  "total_tests": 2233
+}

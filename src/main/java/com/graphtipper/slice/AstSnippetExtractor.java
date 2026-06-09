@@ -532,78 +532,85 @@ public final class AstSnippetExtractor {
         return best;
     }
 
+    /** Carries the body-slice text together with the enclosing method's source start line. */
+    public record ConsumerBodyResult(String body, int startLine) {}
+
     /**
-     * Slice a consumer's method body for artifact §4.4 rendering.
-     * If the body has ≤ 30 statements, returns the full body (with signature line).
-     * Otherwise, returns the signature line plus the block enclosing the first call
-     * to {@code targetSimpleName} plus sibling return/break/throw statements.
+     * Like {@link #sliceConsumerBody} but also returns the enclosing method's source start line,
+     * enabling coverage-pruning callers to pass the correct {@code startLine} to
+     * {@link #annotateLines}.
      *
-     * @return the slice, or null if the method or the call site is not found.
+     * @return a {@link ConsumerBodyResult}; {@code body} and {@code startLine} are both -1 / null
+     *         when the method is not found or has no body.
      */
-    public String sliceConsumerBody(Path file, String methodFqn, String targetSimpleName) {
+    public ConsumerBodyResult sliceConsumerBodyWithLine(Path file, String methodFqn,
+                                                        String targetSimpleName) {
         CacheEntry entry = load(file);
-        if (entry == null || !entry.parseOk) return null;
+        if (entry == null || !entry.parseOk) return new ConsumerBodyResult(null, -1);
         CompilationUnit cu = entry.cu;
 
         Optional<MethodDeclaration> methodOpt = findMethodByFqn(cu, methodFqn, targetSimpleName);
-        if (methodOpt.isEmpty()) return null;
+        if (methodOpt.isEmpty()) return new ConsumerBodyResult(null, -1);
         MethodDeclaration md = methodOpt.get();
-        if (md.getBody().isEmpty()) return null;
+        if (md.getBody().isEmpty()) return new ConsumerBodyResult(null, -1);
+
+        int startLine = md.getBegin().map(p -> p.line).orElse(-1);
         BlockStmt body = md.getBody().get();
 
-        // Count statements (recursive count of Statement nodes within the body).
         long stmtCount = body.findAll(Statement.class).size();
         String signatureLine = md.getDeclarationAsString(false, false, false);
 
         if (stmtCount <= 30) {
-            return signatureLine + " " + body.toString();
+            return new ConsumerBodyResult(signatureLine + " " + body.toString(), startLine);
         }
 
-        // Find the first call to targetSimpleName.
         Optional<MethodCallExpr> callOpt = body.findAll(MethodCallExpr.class).stream()
                 .filter(c -> c.getNameAsString().equals(targetSimpleName))
                 .findFirst();
-        if (callOpt.isEmpty()) return null;
+        if (callOpt.isEmpty()) return new ConsumerBodyResult(null, -1);
 
-        // Walk up from the call to the nearest enclosing BlockStmt.
         MethodCallExpr callExpr = callOpt.get();
         Optional<BlockStmt> blockOpt = callExpr.findAncestor(BlockStmt.class);
         if (blockOpt.isEmpty()) {
-            return signatureLine + " { /* call: " + targetSimpleName + " */ }";
+            return new ConsumerBodyResult(
+                    signatureLine + " { /* call: " + targetSimpleName + " */ }", startLine);
         }
 
         BlockStmt enclosingBlock = blockOpt.get();
-
-        // Find the statement in the block that contains the call.
         Statement callStmt = null;
         for (Statement stmt : enclosingBlock.getStatements()) {
-            if (stmt.findAll(MethodCallExpr.class).stream()
-                    .anyMatch(c -> c == callExpr)) {
+            if (stmt.findAll(MethodCallExpr.class).stream().anyMatch(c -> c == callExpr)) {
                 callStmt = stmt;
                 break;
             }
         }
         if (callStmt == null) {
-            return signatureLine + " " + enclosingBlock.toString();
+            return new ConsumerBodyResult(
+                    signatureLine + " " + enclosingBlock.toString(), startLine);
         }
 
-        // Build minimal block: the call statement + sibling return/break/throw statements.
         LinkedHashSet<Statement> selected = new LinkedHashSet<>();
         selected.add(callStmt);
-
         for (Statement sibling : enclosingBlock.getStatements()) {
-            if (isReturnBreakThrow(sibling)) {
-                selected.add(sibling);
-            }
+            if (isReturnBreakThrow(sibling)) selected.add(sibling);
         }
 
-        // Serialize the selected statements as a block.
         StringBuilder result = new StringBuilder(signatureLine).append(" {");
         for (Statement s : selected) {
             result.append("\n        ").append(s.toString());
         }
         result.append("\n    }");
-        return result.toString();
+        return new ConsumerBodyResult(result.toString(), startLine);
+    }
+
+    /**
+     * Slice a consumer's method body for artifact §4.4 rendering.
+     * Delegates to {@link #sliceConsumerBodyWithLine} and returns only the body string.
+     *
+     * @return the slice, or null if the method or the call site is not found.
+     */
+    public String sliceConsumerBody(Path file, String methodFqn, String targetSimpleName) {
+        return sliceConsumerBodyWithLine(file, methodFqn, targetSimpleName).body();
     }
 
     private boolean isReturnBreakThrow(Statement s) {
@@ -686,5 +693,54 @@ public final class AstSnippetExtractor {
                         .anyMatch(c -> c.getNameAsString().equals(targetSimpleName)))
                 .findFirst()
                 .or(() -> Optional.of(candidates.get(0)));
+    }
+
+    /**
+     * Replaces lines not covered by the pruner with a single placeholder comment.
+     * Consecutive unexecuted lines collapse to one placeholder. Pruner=null is a no-op.
+     *
+     * @param rawLines  body lines as they appear in source order
+     * @param fileKey   JaCoCo package-qualified source path, e.g. "com/example/Foo.java"
+     * @param startLine line number of rawLines[0] in the source
+     * @param pruner    optional; null means return rawLines unchanged
+     */
+    public static java.util.List<String> annotateLines(
+            java.util.List<String> rawLines, String fileKey, int startLine,
+            SnippetCoveragePruner pruner) {
+        if (pruner == null) return rawLines;
+        java.util.List<String> out = new java.util.ArrayList<>(rawLines.size());
+        boolean inGap = false;
+        for (int i = 0; i < rawLines.size(); i++) {
+            int line = startLine + i;
+            // Structural lines (method signature lines ending in `) {` or `) {' etc.,
+            // closing braces, blank lines) are not tracked by JaCoCo as statements,
+            // so isExecuted returns false for them. Passing them through preserves
+            // the method's visual structure for the LLM — pruning them only adds noise.
+            if (isStructural(rawLines.get(i))) {
+                out.add(rawLines.get(i));
+                inGap = false;
+                continue;
+            }
+            if (pruner.isExecuted(fileKey, line)) {
+                out.add(rawLines.get(i));
+                inGap = false;
+            } else if (!inGap) {
+                out.add("// … unexecuted by tests");
+                inGap = true;
+            }
+        }
+        return out;
+    }
+
+    private static boolean isStructural(String line) {
+        String s = line.strip();
+        if (s.isEmpty()) return true;
+        // Closing braces, possibly with trailing `;` or `)` (lambda close).
+        if (s.matches("^[)}\\];,]+$")) return true;
+        // Method/class declarations ending in `{`. Allows annotations, modifiers, etc.
+        if (s.endsWith("{")) return true;
+        // Pure comments (`//...`, `/*...`, `*/`, ` * ...`)
+        if (s.startsWith("//") || s.startsWith("/*") || s.startsWith("*")) return true;
+        return false;
     }
 }

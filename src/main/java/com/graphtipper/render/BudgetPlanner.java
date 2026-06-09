@@ -17,6 +17,14 @@ public final class BudgetPlanner {
 
     public BudgetPlanner(TokenBudget budget) { this.budget = budget; }
 
+    private com.graphtipper.chop.score.KatzScorer katzScorer;
+
+    /** Attach a Katz scorer so that {@link #evictLowRankAndSingletonClusters} sorts surviving clusters by Katz. */
+    public BudgetPlanner withScorer(com.graphtipper.chop.score.KatzScorer s) {
+        this.katzScorer = s;
+        return this;
+    }
+
     // -----------------------------------------------------------------------
     // Cluster-based eviction API (spec §7.2)
     // -----------------------------------------------------------------------
@@ -49,7 +57,11 @@ public final class BudgetPlanner {
      * @return a (possibly trimmed) artifact that fits within the budget
      */
     public Artifact fit(Artifact a, TokenBudget tokenBudget) {
-        Artifact cur = a;
+        // Apply Katz ordering before any budget decision: this is the ordering the user
+        // asked for via --katz-rank and it must take effect even when the artifact fits
+        // without eviction (earlier revisions buried sortByKatz inside evictLowRank...,
+        // so under budget the rendered order silently fell back to chain count).
+        Artifact cur = (katzScorer != null) ? applyKatzOrdering(a) : a;
         if (fitEstimate(cur) <= tokenBudget.max()) return cur;
 
         cur = evictLowRankAndSingletonClusters(cur);
@@ -105,6 +117,25 @@ public final class BudgetPlanner {
     }
 
     /**
+     * Re-orders each consumer's clusters by Katz centrality, descending. Pure pre-processing
+     * step — touches nothing else. Always called first inside {@link #fit} when a scorer is set.
+     */
+    private Artifact applyKatzOrdering(Artifact a) {
+        if (katzScorer == null) return a;
+        var newConsumers = new ArrayList<ConsumerContract>();
+        for (ConsumerContract c : a.consumers()) {
+            var ordered = sortByKatz(c.clusters(), katzScorer);
+            newConsumers.add(new ConsumerContract(
+                    c.consumerFqn(), c.file(), c.line(), c.bodySlice(), c.bodySliceStartLine(),
+                    c.returnValueUsage(), c.exceptionHandling(),
+                    c.implications(), ordered, c.chainsCovered()));
+        }
+        return new Artifact(a.target(), a.currentBody(), a.chains(),
+                a.directTests(), newConsumers, a.longTailSingletons(),
+                a.truncated(), a.localContext());
+    }
+
+    /**
      * Moves clusters with {@code chainsCovered() ≤ 1} from each consumer's cluster
      * list into {@code longTailSingletons}.
      */
@@ -117,10 +148,11 @@ public final class BudgetPlanner {
                 if (cluster.chainsCovered() <= 1) demoted.add(cluster);
                 else keep.add(cluster);
             }
+            var ordered = sortByKatz(keep, katzScorer);
             newConsumers.add(new ConsumerContract(
-                    c.consumerFqn(), c.file(), c.line(), c.bodySlice(),
+                    c.consumerFqn(), c.file(), c.line(), c.bodySlice(), c.bodySliceStartLine(),
                     c.returnValueUsage(), c.exceptionHandling(),
-                    c.implications(), keep, c.chainsCovered()));
+                    c.implications(), ordered, c.chainsCovered()));
         }
         return new Artifact(a.target(), a.currentBody(), a.chains(),
                 a.directTests(), newConsumers, demoted, a.truncated(), a.localContext());
@@ -143,7 +175,7 @@ public final class BudgetPlanner {
                 newClusters.add(cluster.withSignals(newSignals));
             }
             newConsumers.add(new ConsumerContract(
-                    c.consumerFqn(), c.file(), c.line(), c.bodySlice(),
+                    c.consumerFqn(), c.file(), c.line(), c.bodySlice(), c.bodySliceStartLine(),
                     c.returnValueUsage(), c.exceptionHandling(),
                     c.implications(), newClusters, c.chainsCovered()));
         }
@@ -160,7 +192,7 @@ public final class BudgetPlanner {
                 newClusters.add(cluster.withClusterSlice(ClusterSlice.empty()));
             }
             newConsumers.add(new ConsumerContract(
-                    c.consumerFqn(), c.file(), c.line(), c.bodySlice(),
+                    c.consumerFqn(), c.file(), c.line(), c.bodySlice(), c.bodySliceStartLine(),
                     c.returnValueUsage(), c.exceptionHandling(),
                     c.implications(), newClusters, c.chainsCovered()));
         }
@@ -182,7 +214,7 @@ public final class BudgetPlanner {
                 newClusters.add(cluster.withMembers(newMembers));
             }
             newConsumers.add(new ConsumerContract(
-                    c.consumerFqn(), c.file(), c.line(), c.bodySlice(),
+                    c.consumerFqn(), c.file(), c.line(), c.bodySlice(), c.bodySliceStartLine(),
                     c.returnValueUsage(), c.exceptionHandling(),
                     c.implications(), newClusters, c.chainsCovered()));
         }
@@ -211,7 +243,7 @@ public final class BudgetPlanner {
                 newClusters.add(cluster.withSignals(filtered));
             }
             newConsumers.add(new ConsumerContract(
-                    c.consumerFqn(), c.file(), c.line(), c.bodySlice(),
+                    c.consumerFqn(), c.file(), c.line(), c.bodySlice(), c.bodySliceStartLine(),
                     c.returnValueUsage(), c.exceptionHandling(),
                     c.implications(), newClusters, c.chainsCovered()));
         }
@@ -403,5 +435,29 @@ public final class BudgetPlanner {
                 budget.tryAdd(String.join("", u.type().enumConstants()));
             }
         }
+    }
+
+    /**
+     * Returns clusters sorted by max Katz score over the methods touched by each cluster's
+     * path signature, descending. Null scorer = passthrough (input order preserved).
+     */
+    public static java.util.List<com.graphtipper.slice.PathCluster> sortByKatz(
+            java.util.List<com.graphtipper.slice.PathCluster> clusters,
+            com.graphtipper.chop.score.KatzScorer scorer) {
+        if (scorer == null) return clusters;
+        var copy = new java.util.ArrayList<>(clusters);
+        copy.sort((a, b) -> Double.compare(maxKatz(b, scorer), maxKatz(a, scorer)));
+        return copy;
+    }
+
+    private static double maxKatz(com.graphtipper.slice.PathCluster c,
+                                   com.graphtipper.chop.score.KatzScorer scorer) {
+        double best = 0.0;
+        for (String fqn : c.signature().fqns()) {
+            var ref = new com.graphtipper.chop.model.MethodRef(fqn, "");
+            double s = scorer.score(ref);
+            if (s > best) best = s;
+        }
+        return best;
     }
 }

@@ -1,0 +1,24 @@
+// Attach the in-JVM coverage agent to Test tasks. Config via env (set by run_coverage_agent.sh):
+//   GTCOV_OUT      output dir (matrix*.tsv + executed_tests.txt land here)
+//   GTCOV_AGENT    absolute path to gtcov-agent.jar
+//   GTCOV_INCLUDES ';'-separated type-name prefixes to instrument
+def out = System.getenv('GTCOV_OUT')
+def agentJar = System.getenv('GTCOV_AGENT')
+def includes = System.getenv('GTCOV_INCLUDES')
+
+gradle.allprojects { p ->
+  p.tasks.withType(Test).configureEach { t ->
+    t.maxParallelForks = 1        // one worker JVM → one Recorder → complete matrix
+    t.forkEvery = 0               // never restart the worker mid-suite
+    t.jvmArgs(["-javaagent:" + agentJar + "=out=" + out + ",includes=" + includes])
+    def executed = java.util.Collections.synchronizedSet(new java.util.LinkedHashSet())
+    t.afterTest { desc, result ->
+      executed.add((desc.className + "." + desc.name).replaceAll(/[\[(].*/, ""))
+    }
+    t.afterSuite { desc, result ->
+      if (desc.getParent() == null) {
+        new File(out, "executed_tests.txt").text = executed.join("\n")
+      }
+    }
+  }
+}

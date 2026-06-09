@@ -1,0 +1,34 @@
+// Apply the PITest gradle plugin (info.solidsoft.pitest) to the root project WITHOUT
+// editing the project's build.gradle. Config via env (set by run_mutation.sh):
+//   PIT_TARGET_CLASSES  ';'-separated PITest class globs to mutate
+//   PIT_TARGET_TESTS    ';'-separated PITest class globs to run as tests
+initscript {
+  repositories { gradlePluginPortal(); mavenCentral() }
+  dependencies { classpath 'info.solidsoft.gradle.pitest:gradle-pitest-plugin:1.19.0' }
+}
+
+// NB: these locals must NOT be named targetClasses/targetTests — inside the pitest{} closure
+// (OWNER_FIRST resolution) an assignment to those names would rebind the local instead of the
+// extension property, leaving PITest with empty defaults ("0 mutations found").
+def tcEnv = System.getenv('PIT_TARGET_CLASSES')
+def ttEnv = System.getenv('PIT_TARGET_TESTS')
+
+rootProject {
+  // Apply + configure in afterEvaluate: by then the project's build.gradle has applied the
+  // java plugin, so the pitest plugin registers its 'pitest' extension. Applying by class
+  // (resolved from the initscript classpath) is reliable from an init script.
+  afterEvaluate { proj ->
+    proj.pluginManager.apply(info.solidsoft.gradle.pitest.PitestPlugin)
+    proj.pitest {
+      targetClasses = (tcEnv.split(';') as List)
+      targetTests = (ttEnv.split(';') as List)
+      outputFormats = ['XML']
+      threads = 4
+      timestampedReports = false
+      failWhenNoMutations = false
+      // picocli enables a SecurityManager on Java 18-23 (System.exit tests); allow it in the
+      // PITest minion JVMs too, else setSecurityManager throws on Java 21.
+      jvmArgs = ['-Djava.security.manager=allow']
+    }
+  }
+}

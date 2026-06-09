@@ -1,18 +1,7 @@
 package com.graphtipper.chop.cli;
 
-import com.graphtipper.chop.annotate.ChopAnnotator;
-import com.graphtipper.chop.compose.ChopComposer;
 import com.graphtipper.chop.model.ChopGraph;
-import com.graphtipper.chop.model.MethodNode;
-import com.graphtipper.chop.model.MethodRef;
-import com.graphtipper.chop.model.StatementId;
-import com.graphtipper.chop.model.StatementNode;
-import com.graphtipper.chop.pdg.JavaParserContext;
-import com.graphtipper.chop.pdg.MethodPDG;
-import com.graphtipper.chop.pdg.PdgBuilder;
-import com.graphtipper.chop.reach.EntryPointFinder;
 import com.graphtipper.chop.reach.MaxMethodsExceededException;
-import com.graphtipper.chop.reach.ReachabilityScan;
 import com.graphtipper.chop.render.CytoscapeRenderer;
 import com.graphtipper.chop.render.DotRenderer;
 import com.graphtipper.chop.render.GraphMLRenderer;
@@ -29,12 +18,6 @@ import picocli.CommandLine.Option;
 import java.io.BufferedWriter;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.HashMap;
-import java.util.HashSet;
-import java.util.LinkedHashMap;
-import java.util.List;
-import java.util.Map;
-import java.util.Set;
 import java.util.concurrent.Callable;
 
 @Command(
@@ -98,59 +81,17 @@ public final class ChopCommand implements Callable<Integer> {
         }
 
         int depthLimit = maxDepth == null ? Integer.MAX_VALUE : maxDepth;
-        ReachabilityScan.Result reach;
+        ChopGraph graph;
         try {
-            reach = new ReachabilityScan(new EntryPointFinder(), depthLimit, maxMethods)
-                .run(pg, targetMethod);
+            graph = new ChopPipeline(project, depthLimit, maxMethods).build(pg, targetMethod);
         } catch (MaxMethodsExceededException e) {
             System.err.println("chop: --max-methods exceeded (" + e.count
                 + "); raise --max-methods to proceed");
             return 3;
-        }
-
-        JavaParserContext jpCtx = JavaParserContext.forProject(project);
-        PdgBuilder builder = new PdgBuilder(jpCtx);
-
-        Map<MethodRef, MethodPDG> pdgs = new LinkedHashMap<>();
-        MethodRef targetRef = new MethodRef(targetMethod.fqn(), targetMethod.signature());
-        for (Node.Method m : reach.involved()) {
-            try {
-                boolean isTarget = new MethodRef(m.fqn(), m.signature()).equals(targetRef);
-                pdgs.put(new MethodRef(m.fqn(), m.signature()), builder.build(m, isTarget));
-            } catch (Exception e) {
-                System.err.println("chop: skipped " + m.fqn() + ": " + e.getMessage());
-            }
-        }
-
-        MethodPDG targetPdg = pdgs.get(targetRef);
-        if (targetPdg == null) {
-            System.err.println("chop: target has empty body, nothing to chop");
+        } catch (ChopPipeline.EmptyTargetBodyException e) {
+            System.err.println("chop: " + e.getMessage());
             return 2;
         }
-        List<StatementId> targetStmts = targetPdg.statements().stream()
-            .map(StatementNode::id).toList();
-        Set<MethodRef> entries = new HashSet<>();
-        for (Node.Method e : reach.entryPoints()) {
-            entries.add(new MethodRef(e.fqn(), e.signature()));
-        }
-
-        Map<MethodRef, MethodPDG> annotatedPdgs = new LinkedHashMap<>();
-        for (Map.Entry<MethodRef, MethodPDG> entry : pdgs.entrySet()) {
-            MethodNode mn = entry.getValue().methodNode();
-            boolean isTarget = entry.getKey().equals(targetRef);
-            boolean isTest = entries.contains(entry.getKey()) || mn.isTest();
-            MethodNode marked = new MethodNode(mn.owner(), isTest, isTarget, mn.touchedBy());
-            annotatedPdgs.put(entry.getKey(),
-                new MethodPDG(entry.getValue().ref(), marked,
-                    entry.getValue().statements(), entry.getValue().expressions(),
-                    entry.getValue().intraEdges(), entry.getValue().parameters(),
-                    entry.getValue().returnValues(), entry.getValue().bodyByStatement()));
-        }
-
-        ChopGraph graph = new ChopComposer().compose(
-            targetRef, targetStmts, entries, annotatedPdgs, pg);
-
-        new ChopAnnotator().annotate(graph);
 
         Files.createDirectories(out);
         try (BufferedWriter w = Files.newBufferedWriter(out.resolve("chop.dot"))) {
@@ -162,7 +103,7 @@ public final class ChopCommand implements Callable<Integer> {
         try (BufferedWriter w = Files.newBufferedWriter(out.resolve("chop.html"))) {
             new CytoscapeRenderer().render(graph, w);
         }
-        if (entries.isEmpty()) {
+        if (graph.entryPoints().isEmpty()) {
             System.err.println("chop: WARNING — no test entry points reach this target");
         }
         System.err.println("chop: wrote 3 artefacts to " + out.toAbsolutePath());
