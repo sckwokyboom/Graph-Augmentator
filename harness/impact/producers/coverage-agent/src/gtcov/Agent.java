@@ -16,6 +16,8 @@ import static net.bytebuddy.matcher.ElementMatchers.isBridge;
 import static net.bytebuddy.matcher.ElementMatchers.isMethod;
 import static net.bytebuddy.matcher.ElementMatchers.isNative;
 import static net.bytebuddy.matcher.ElementMatchers.isSynthetic;
+import static net.bytebuddy.matcher.ElementMatchers.named;
+import static net.bytebuddy.matcher.ElementMatchers.namedOneOf;
 import static net.bytebuddy.matcher.ElementMatchers.nameStartsWith;
 import static net.bytebuddy.matcher.ElementMatchers.none;
 import static net.bytebuddy.matcher.ElementMatchers.not;
@@ -66,6 +68,33 @@ public final class Agent {
                         .and(not(isBridge()))
                         .and(not(isSynthetic())))))
             .installOn(inst);
+
+        String capture = cfg.get("capture");
+        if (capture != null && !capture.isEmpty()) {
+            // Map "pkg.Class.method" specs → class-name matcher + method-name set.
+            java.util.Set<String> classNames = new java.util.HashSet<>();
+            java.util.Set<String> methodNames = new java.util.HashSet<>();
+            for (String spec : capture.split(";")) {
+                int dot = spec.lastIndexOf('.');
+                if (dot > 0) {
+                    classNames.add(spec.substring(0, dot));
+                    methodNames.add(spec.substring(dot + 1));
+                }
+            }
+            ElementMatcher.Junction<TypeDescription> capType = none();
+            for (String cn : classNames) capType = capType.or(named(cn));
+            final ElementMatcher.Junction<TypeDescription> ct = capType;
+            final java.util.Set<String> mNames = methodNames;
+            new AgentBuilder.Default()
+                .ignore(nameStartsWith("gtcov.").or(nameStartsWith("net.bytebuddy.")))
+                .with(AgentBuilder.RedefinitionStrategy.RETRANSFORMATION)
+                .type(ct)
+                .transform((builder, type, cl, module, pd) ->
+                    builder.visit(Advice.to(ValueAdvice.class).on(
+                        isMethod().and(namedOneOf(mNames.toArray(new String[0]))))))
+                .installOn(inst);
+            System.err.println("[gtcov] value capture on: " + capture);
+        }
 
         System.err.println("[gtcov] agent installed: out=" + out + " includes=" + includes);
     }
