@@ -24,17 +24,18 @@ echo "[build_agent] ByteBuddy = $BB"
 # Compile all three sources against ByteBuddy. --release 11 loads fine on the Java 21 worker.
 javac --release 11 -cp "$BB" -d "$BUILD/classes" "$SRC"/gtcov/*.java
 
-# boot jar: Recorder ONLY (bootstrap-resident; unique package, no conflict).
+# boot jar: Recorder + ValueRecorder ONLY (bootstrap-resident; inlined advice calls them).
 mkdir -p "$BUILD/boot/gtcov"
 cp "$BUILD/classes/gtcov/Recorder.class" "$BUILD/boot/gtcov/"
-( cd "$BUILD/boot" && jar cf "$HERE/gtcov-boot.jar" gtcov/Recorder.class )
+cp "$BUILD/classes/gtcov/ValueRecorder.class" "$BUILD/boot/gtcov/"
+( cd "$BUILD/boot" && jar cf "$HERE/gtcov-boot.jar" gtcov/Recorder.class gtcov/ValueRecorder.class )
 
 # agent jar: Agent + CovAdvice + exploded ByteBuddy, but NOT Recorder (it lives only on
 # the bootstrap loader to avoid a split-package double-load — Recorder is the single shared
 # class). Explode ByteBuddy without its META-INF/module-info.
 mkdir -p "$BUILD/agent"
 cp -r "$BUILD/classes/gtcov" "$BUILD/agent/"
-rm -f "$BUILD/agent/gtcov/Recorder.class"
+rm -f "$BUILD/agent/gtcov/Recorder.class" "$BUILD/agent/gtcov/ValueRecorder.class"
 ( cd "$BUILD/agent" && unzip -oq "$BB" -x 'META-INF/*' 'module-info.class' )
 cat > "$BUILD/MANIFEST.MF" <<'MF'
 Premain-Class: gtcov.Agent
