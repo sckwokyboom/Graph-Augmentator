@@ -27,8 +27,10 @@ def _export(tmp_path):
         {"id": "stub", "label": "CALL", "properties": {
             "CODE": "throw new UnsupportedOperationException(\"TODO\")", "LINE_NUMBER": 50,
             "PARENT_METHOD_ID": "mp", "METHOD_FULL_NAME": "<operator>.throw"}},
+        # Joern synthesizes the receiver: CODE says "this.putValue(...)" while the
+        # source line has no "this." — the consistency check must tolerate that.
         {"id": "call", "label": "CALL", "properties": {
-            "CODE": "cell = putValue(row, col, v[col])", "LINE_NUMBER": 21,
+            "CODE": "this.putValue(row, col, v[col])", "LINE_NUMBER": 21,
             "PARENT_METHOD_ID": "mc", "METHOD_FULL_NAME": "p.Table.putValue:Cell(int,int,Text)"}},
         {"id": "guard", "label": "CALL", "properties": {
             "CODE": "col < v.length", "LINE_NUMBER": 20,

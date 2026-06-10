@@ -34,12 +34,19 @@ def _norm(s):
 
 
 def _consistent(seed_vertices, source_line):
-    """A seed matches the disk line if its normalized CODE prefix appears there."""
+    """A seed matches the disk line if its normalized CODE prefix appears there.
+    Joern synthesizes receivers ("this.putValue(...)" for source "putValue(...)"),
+    so also try with the leading "this." stripped; and accept the reverse
+    containment for statements the CPG renders longer than one source line."""
     src = _norm(source_line)
+    if not src:
+        return False
     for v in seed_vertices:
-        c = _norm(v.get("properties", {}).get("CODE", ""))[:25]
-        if c and c in src:
-            return True
+        code = _norm(v.get("properties", {}).get("CODE", ""))
+        for cand in (code, code.removeprefix("this.")):
+            c = cand[:25]
+            if c and (c in src or src in cand):
+                return True
     return False
 
 
