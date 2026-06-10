@@ -93,3 +93,23 @@ Failure on any criterion → diagnose by measurement (print ranking table, bound
 - Ambiguity: seed rule, hop caps (RD ≤2 test-side, BFS ≤3, guards ≤1), K=3, ε=0.05, line budgets (45 total / ≥15 assertion section in mixed mode), boundary line-filter (≤ failing assertion line), contrast threshold (`|P| < 5` → FREQUENCY mode), and the three-mode ranking-confidence enum are all pinned; `[param]`-stripping and `__t__` mapping pinned.
 - External review round (2026-06-10, ChatGPT via user): accepted — post-assertion boundary pollution (measured real: 17/118 tests, 53 never-executed calls → line filter), behavioral contrast degradation + confidence enum, static-path labeling, localization@k reporting, hypothesis-not-causality goal wording, universe/real-corpora followups. Rejected — setup/mutation boundary split (receiver flows dangle ⇒ fake precision), 3-universe gate requirement (only one matrix exists; widening is a measured `build_all` followup), usefulness-metrics-in-gate (already explicitly the Agentic-Bench A/B hypothesis, out of this gate's scope).
 - Scope: one module + additive index/CLI/tool changes + two-corpus gate → single implementation plan.
+
+**G1 result (measured 2026-06-10): criteria (b)–(f) PASSED; criterion (a) FAILED — the
+pre-committed v2.1 trigger, now measured.** `addRowValues` ranked **7/17**
+(localization@1 ✗ @3 ✗ @5 ✗); top-3 = forColumns 0.8811, forDefaultColumns 0.8778,
+toString 0.8307 vs addRowValues 0.8235. Eight TextTable core methods tie at ef=118/118 —
+discrimination came entirely from green-set composition (ep 32–57). **Method-level hit
+coverage is structurally blind to a mutation that changes returned values without changing
+the executed method set**; the flat-ranking marker fired on top-2 (Δ=0.0033 < ε), so the
+artifact self-reported its non-discrimination honestly. Mechanics: 33 lines, 0.66 s,
+`applicability: 0 exception-sliced, 118 assertion-sliced, 0 not-applicable of 118 red tests`,
+mode CONTRAST (|P|=148), suite 76 green.
+
+The gate also caught **two real bugs**, both fixed and unit-pinned: (1) test-class *helper*
+methods leaked into the boundary — the export sets IS_TEST only on @Test methods, so
+`HelpTest.assertEquals` (n=116) topped and buried the boundary → excluded via the `__t__`
+FILENAME marker (`is_test_code`); (2) Joern synthesizes some helper METHOD vertices with an
+empty FILENAME → class-level fallback (`_test_classes` built from `__t__`-resident methods).
+Post-fix boundary renders 100% production, actual-side first (getUsageMessage 26,
+Layout.toString 4, TextTable.toString 2, optionList 1); `addRowValues` present at n=4 as
+`prior-call` (the receiver-flow dangle keeps it out of actual-side, by design).
