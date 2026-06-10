@@ -142,8 +142,111 @@ def slice_failure(test_id, cause, idx, package, project_root=None):
     return fs
 
 
-def rank_candidates(*args, **kwargs):       # implemented in Task 4
-    raise NotImplementedError
+def _reach(call_map, roots, hops):
+    """BFS parents over the forward call map; roots are reachable at hop 0."""
+    parent = {r: None for r in roots}
+    frontier = set(roots)
+    for _ in range(hops):
+        nxt = set()
+        for u in frontier:
+            for v in call_map.get(u, ()):
+                if v not in parent:
+                    parent[v] = u
+                    nxt.add(v)
+        frontier = nxt
+    return parent
+
+
+def _path_to(parent, fqn):
+    out, cur = [], fqn
+    while cur is not None:
+        out.append(cur)
+        cur = parent[cur]
+    return list(reversed(out))
+
+
+def _value_shaping(idx, fqn, related_fqns, cap_lines=3, cap_guards=2):
+    """RETURNs, calls into other suspects/boundary methods, else first statements."""
+    lines, guards = [], []
+    for m in idx.methods_named(fqn)[:2]:
+        stmts = idx.children.get(m["id"], [])
+        rets = [v for v in stmts if v.get("label") == "RETURN"
+                or v.get("properties", {}).get("CODE", "").lstrip().startswith("return")]
+        calls = [v for v in stmts if v.get("label") == "CALL"
+                 and v.get("properties", {}).get("METHOD_FULL_NAME", "").split(":")[0]
+                 in related_fqns]
+        picked = (rets + calls) or stmts[:cap_lines]
+        sid = [v["id"] for v in picked[:cap_lines]]
+        lines += _codes(idx, sid, cap_lines)
+        guards += _codes(idx, _walk(idx.rev_cdg, sid, depth=1), cap_guards)
+    return lines[:cap_lines], guards[:cap_guards]
+
+
+def rank_candidates(slices, idx, package, matrix, passing,
+                    k=3, hops=3, eps=0.05, min_contrast=5):
+    F = {_canon(s.test_id) for s in slices}
+    boundary_fqns = {b.fqn for s in slices for b in s.boundary}
+    reach = _reach(idx.call_map, boundary_fqns, hops)
+    notes = []
+    if matrix:
+        P = {_canon(t) for t in passing}
+        use_contrast = len(P) >= min_contrast
+        mode = "CONTRAST" if use_contrast else "FREQUENCY"
+        if not use_contrast:
+            notes.append(f"contrast set too thin (|P|={len(P)} < {min_contrast}) — "
+                         "frequency ranking, LOW confidence")
+        cands = []
+        for fqn, tests in matrix.items():
+            cov = {_canon(t) for t in tests}
+            ef = len(F & cov)
+            if ef == 0:
+                continue
+            if use_contrast:
+                ep = len(P & cov)
+                score = ef / math.sqrt(len(F) * (ef + ep))
+            else:
+                score = float(ef)
+            c = Candidate(fqn=fqn, score=score, ef=ef, reachable=fqn in reach)
+            if c.reachable:
+                c.path = _path_to(reach, fqn)
+            else:
+                c.tags.append("not statically reachable from the test boundary "
+                              "(possible indirect/virtual dispatch)")
+            cands.append(c)
+        cands.sort(key=lambda c: (not c.reachable, -c.score, c.fqn))
+        cands = cands[:k]
+        if len(cands) >= 2 and abs(cands[0].score - cands[1].score) < eps:
+            notes.append("coverage does not discriminate the top candidates")
+    else:
+        mode = "BOUNDARY-ONLY"
+        notes.append("no coverage matrix — boundary-level localization only, "
+                     "LOW confidence")
+        counts = {}
+        for s in slices:
+            for fqn in {b.fqn for b in s.boundary}:
+                counts[fqn] = counts.get(fqn, 0) + 1
+        cands = [Candidate(fqn=f, score=float(n), ef=n, reachable=True, path=[f])
+                 for f, n in counts.items()]
+        cands.sort(key=lambda c: (-c.score, c.fqn))
+        callees = []
+        have = {c.fqn for c in cands}
+        for c in list(cands):
+            for callee in sorted(idx.call_map.get(c.fqn, ())):
+                if callee in have or not callee.startswith(package):
+                    continue
+                tms = idx.methods_named(callee)
+                if not tms or all(idx.is_test(t) for t in tms):
+                    continue
+                have.add(callee)
+                cc = Candidate(fqn=callee, score=c.score, ef=c.ef, reachable=True,
+                               path=[c.fqn, callee])
+                cc.tags.append("direct callee of a boundary method")
+                callees.append(cc)
+        cands = (cands + callees)[:k]
+    related = {c.fqn for c in cands} | boundary_fqns
+    for c in cands:
+        c.lines, c.guards = _value_shaping(idx, c.fqn, related)
+    return cands, mode, notes
 
 
 def build_assertion_report(*args, **kwargs):  # implemented in Task 5

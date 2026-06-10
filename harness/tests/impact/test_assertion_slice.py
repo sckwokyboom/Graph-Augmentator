@@ -117,3 +117,46 @@ def test_unresolved_test_method_falls_back(tmp_path):
     [(tid, cause)] = _fails(("p.TT.t2", _TRACE_T2))
     fs = slice_failure(tid, cause, idx, "p.")
     assert not fs.resolved and fs.seeds == [] and fs.boundary == []
+
+
+def _slices(tmp_path, idx=None):
+    idx = idx or load_index(_export(tmp_path))
+    fails = _fails(("p.TT.t1", _TRACE_T1), ("p.TT.t2", _TRACE_T2))
+    return idx, [slice_failure(t, c, idx, "p.") for t, c in fails]
+
+
+def test_contrast_ochiai_order_and_reachability_demotion(tmp_path):
+    idx, slices = _slices(tmp_path)
+    cands, mode, notes = rank_candidates(slices, idx, "p.", _MATRIX, _GREENS5)
+    assert mode == "CONTRAST"
+    assert [c.fqn for c in cands] == ["p.Tbl.add", "p.Tbl.put", "p.Tbl.flush"]
+    assert abs(cands[0].score - 0.8165) < 0.001    # ef=2, ep=1, |F|=2
+    assert abs(cands[1].score - 0.7071) < 0.001    # ef=2, ep=2
+    assert cands[0].reachable and cands[1].reachable          # add: boundary; put: 1 hop
+    assert cands[1].path == ["p.Tbl.add", "p.Tbl.put"]
+    assert not cands[2].reachable                              # flush excluded by line filter
+    assert any("not statically reachable" in t for t in cands[2].tags)
+    assert not any("discriminate" in n for n in notes)         # 0.82 vs 0.71 > eps
+    # value-shaping lines for the top candidate
+    assert any("return this" in ln for ln in cands[0].lines)
+    assert any("this.put(r, c)" in ln for ln in cands[0].lines)
+
+
+def test_frequency_mode_when_contrast_thin(tmp_path):
+    idx, slices = _slices(tmp_path)
+    cands, mode, notes = rank_candidates(slices, idx, "p.", _MATRIX, ["p.TT.g1", "p.TT.g2"])
+    assert mode == "FREQUENCY"
+    assert any("contrast set too thin" in n for n in notes)
+    assert [c.fqn for c in cands][:2] == ["p.Tbl.add", "p.Tbl.put"]   # ef tie -> fqn asc
+    assert any("discriminate" in n for n in notes)                    # equal ef scores
+
+
+def test_boundary_only_mode_without_matrix(tmp_path):
+    idx, slices = _slices(tmp_path)
+    cands, mode, notes = rank_candidates(slices, idx, "p.", None, [])
+    assert mode == "BOUNDARY-ONLY"
+    assert any("no coverage matrix" in n for n in notes)
+    fqns = [c.fqn for c in cands]
+    assert "p.Tbl.add" in fqns and "p.Tbl.get" in fqns
+    callee = next(c for c in cands if c.fqn == "p.Tbl.put")
+    assert any("direct callee" in t for t in callee.tags)
