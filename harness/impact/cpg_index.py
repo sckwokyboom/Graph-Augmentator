@@ -32,6 +32,7 @@ class CpgIndex:
         for m in self.methods:
             name = m["properties"].get("FULL_NAME", "").split(":", 1)[0]
             self._by_name[name].append(m)
+        self._call_map = None               # lazy: method name -> {callee names}
 
     def resolve_method(self, cls, method, line=None):
         """METHOD vertex for cls.method; overloads disambiguated by line-in-range."""
@@ -47,6 +48,35 @@ class CpgIndex:
     def statements_at(self, method_vertex, line):
         return [v for v in self.children.get(method_vertex["id"], [])
                 if int(v.get("properties", {}).get("LINE_NUMBER", -1)) == line]
+
+    @staticmethod
+    def is_test(method_vertex):
+        """IS_TEST is a JSON boolean in the real export, a string elsewhere."""
+        return str(method_vertex.get("properties", {}).get("IS_TEST")).lower() == "true"
+
+    @staticmethod
+    def map_filename(rel):
+        """The export rewrites test source dirs to src/__t__/...; map back for disk reads."""
+        return rel.replace("/__t__/", "/test/") if rel else rel
+
+    def methods_named(self, name):
+        """All METHOD vertices whose FULL_NAME name-part (before ':') equals name."""
+        return self._by_name.get(name, [])
+
+    @property
+    def call_map(self):
+        """Forward static call map: method FQN-name -> set of callee FQN-names
+        (from child CALL vertices' METHOD_FULL_NAME; <operator>.* excluded)."""
+        if self._call_map is None:
+            m = defaultdict(set)
+            for mv in self.methods:
+                name = mv["properties"].get("FULL_NAME", "").split(":", 1)[0]
+                for s in self.children.get(mv["id"], []):
+                    tgt = s.get("properties", {}).get("METHOD_FULL_NAME", "").split(":", 1)[0]
+                    if tgt and not tgt.startswith("<operator>"):
+                        m[name].add(tgt)
+            self._call_map = m
+        return self._call_map
 
 
 def load_index(export_json) -> CpgIndex:
