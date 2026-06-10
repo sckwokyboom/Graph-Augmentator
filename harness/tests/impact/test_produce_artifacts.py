@@ -74,3 +74,26 @@ def test_gen_outputs_names(tmp_path):
     c = pa.Ctx(tmp_path, "a.B$C.putValue", "f#t", ["T"], tmp_path, None, False, False)
     s = tmp_path / "slices"
     assert pa._gen_outputs(c) == [s / "putValue-graph-slice.md", s / "putValue-graph-slice-verbose.md"]
+
+
+def test_impact_outputs_names(tmp_path):
+    c = pa.Ctx(tmp_path, "a.B.m", "f#t", ["T"], tmp_path, None, False, False)
+    i = tmp_path / "impact"
+    assert pa._impact_outputs(c) == [
+        i / "methods.json", i / "coverage.json", i / "mutation.json", i / "executed_tests.txt"]
+
+
+def test_provenance_writes_all_keys(tmp_path):
+    (tmp_path / "slices").mkdir()
+    (tmp_path / "impact").mkdir()
+    (tmp_path / "slices" / "m-graph-slice.md").write_text("x", encoding="utf-8")
+    (tmp_path / "impact" / "coverage.json").write_text("{}", encoding="utf-8")
+    c = pa.Ctx(tmp_path, "a.B.m", "f#t", ["T1", "T2"], tmp_path, None, False, False)
+    pa.s_provenance(c)
+    import json as _json
+    prov = _json.loads((tmp_path / "provenance.json").read_text(encoding="utf-8"))
+    assert set(prov) == {"project_sha", "graph_tipper_sha", "target_fqn", "slice_target", "tests", "outputs"}
+    assert prov["tests"] == ["T1", "T2"]
+    assert "slices/m-graph-slice.md" in prov["outputs"]
+    assert "impact/coverage.json" in prov["outputs"]
+    assert all(len(h) == 64 for h in prov["outputs"].values())

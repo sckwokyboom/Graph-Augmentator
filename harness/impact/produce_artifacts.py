@@ -9,6 +9,7 @@ Output layout (the contract consumed by Agentic-Bench's prepare.py):
   out/slices/<method>-graph-slice.md          compact generation artifact
   out/slices/<method>-graph-slice-verbose.md  raw budget slice
   out/impact/{methods,coverage,mutation}.json impact-tool data
+  out/impact/executed_tests.txt               suite universe (one test per line)
   out/provenance.json
 """
 from __future__ import annotations
@@ -257,14 +258,73 @@ def s_gen(c: Ctx) -> None:
     (c.out / "slices" / f"{c.method}-graph-slice-verbose.md").write_text(verbose, encoding="utf-8")
 
 
-@stage("impact-data", outputs=lambda c: [])
+def _impact_outputs(c: Ctx) -> list[Path]:
+    i = c.out / "impact"
+    return [i / "methods.json", i / "coverage.json", i / "mutation.json",
+            i / "executed_tests.txt"]
+
+
+@stage("impact-data", outputs=_impact_outputs)
 def s_impact_data(c: Ctx) -> None:
-    raise NotImplementedError("stage body lands in Task 12")
+    from harness.impact.producers.method_index import build_method_index
+    from harness.impact.producers.coverage_agent_parse import build_coverage
+    from harness.impact.producers.build_all import write_artifacts
+    exports = sorted((c.out / "slice-work").glob(".cache/*/export/export.json"))
+    assert len(exports) == 1, f"expected one cached CPG export, got {exports}"
+    methods = build_method_index(exports[0])
+    cov_dir = c.out / "coverage-run"
+    cov_dir.mkdir(parents=True, exist_ok=True)
+    for old in cov_dir.glob("matrix*.tsv"):
+        old.unlink()
+    env = {"GTCAP_OUT": str(cov_dir),
+           "GTCAP_AGENT": str(AGENT_DIR / "gtcov-agent.jar"),
+           "GTCAP_CAPTURE": "",  # matrix run: coverage only, no value capture
+           "GTCAP_INCLUDES": c.target_fqn.rsplit(".", 1)[0]}
+    init = Path(tempfile.gettempdir()) / "gtcap-init.gradle"
+    init.write_text(CAP_INIT, encoding="utf-8")
+    run([gradlew_cmd(), ":test", "--rerun-tasks", "--init-script", init,
+         "--console=plain",
+         *(["-Dorg.gradle.java.home=" + c.java_home] if c.java_home else [])],
+        cwd=c.project, env=env)
+    coverage = build_coverage(sorted(str(p) for p in cov_dir.glob("matrix*.tsv")))
+    mutation: dict = {}
+    if c.with_mutation:
+        raise SystemExit("--with-mutation: run producers/run_mutation flow first; "
+                         "wire its mutation.json here (see impact-tool-state notes)")
+    write_artifacts(c.out / "impact", methods, coverage, mutation)
+    universe = cov_dir / "executed_tests.txt"
+    assert universe.is_file() and universe.stat().st_size > 0, \
+        "coverage run produced no executed_tests.txt"
+    (c.out / "impact" / "executed_tests.txt").write_text(
+        universe.read_text(encoding="utf-8"), encoding="utf-8")
 
 
-@stage("provenance", outputs=lambda c: [])
+def _prov_outputs(c: Ctx) -> list[Path]:
+    return [c.out / "provenance.json"]
+
+
+def _sha256(p: Path) -> str:
+    return hashlib.sha256(p.read_bytes()).hexdigest()
+
+
+def _git_sha(repo: Path) -> str:
+    r = subprocess.run(["git", "rev-parse", "HEAD"], cwd=repo,
+                       capture_output=True, text=True)
+    return r.stdout.strip() if r.returncode == 0 else "unknown"
+
+
+@stage("provenance", outputs=_prov_outputs)
 def s_provenance(c: Ctx) -> None:
-    raise NotImplementedError("stage body lands in Task 12")
+    files = sorted([*(c.out / "slices").glob("*-graph-slice*.md"),
+                    *(c.out / "impact").glob("*.json")])
+    (c.out / "provenance.json").write_text(json.dumps({
+        "project_sha": _git_sha(c.project),
+        "graph_tipper_sha": _git_sha(GT_ROOT),
+        "target_fqn": c.target_fqn,
+        "slice_target": c.slice_target,
+        "tests": c.tests,
+        "outputs": {str(p.relative_to(c.out)): _sha256(p) for p in files},
+    }, indent=2), encoding="utf-8")
 
 
 # --- Selection and execution ---
