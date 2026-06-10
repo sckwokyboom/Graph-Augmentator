@@ -2,6 +2,7 @@ import json
 from harness.impact.assertion_slice import (build_assertion_report, rank_candidates,
                                             render_assertion, slice_failure)
 from harness.impact.cpg_index import load_index
+from harness.impact.crash_slice import DISCLAIMER
 from harness.impact.stack_parse import parse_trace, pick_root_cause
 
 _TRACE_T1 = """org.junit.ComparisonFailure: expected:<x> but was:<y>
@@ -160,3 +161,37 @@ def test_boundary_only_mode_without_matrix(tmp_path):
     assert "p.Tbl.add" in fqns and "p.Tbl.get" in fqns
     callee = next(c for c in cands if c.fqn == "p.Tbl.put")
     assert any("direct callee" in t for t in callee.tags)
+
+
+def test_report_and_render_contrast(tmp_path):
+    idx = load_index(_export(tmp_path))
+    fails = _fails(("p.TT.t1", _TRACE_T1), ("p.TT.t2", _TRACE_T2))
+    report = build_assertion_report(fails, idx, "p.", matrix=_MATRIX, passing=_GREENS5)
+    assert (report.n_failures, report.n_sliced, report.n_na) == (2, 2, 0)
+    assert report.ranking_mode == "CONTRAST"
+    assert "4 methods" in report.universe and "Tbl.*" in report.universe
+    md = render_assertion(report)
+    lines = md.splitlines()
+    assert "2 assertion failures" in lines[0]
+    assert "ranking: CONTRAST" in md and "LOW" not in md
+    assert "static path candidate, not runtime-proven" in md
+    assert "[actual-side]" in md and "[prior-call]" in md
+    assert "Tbl.add → Tbl.put" in md                      # display path for rank-2
+    assert "expected:<x> but was:<y>" in md               # ComparisonFailure headline
+    assert "## Exemplar — p.TT.t1" in md
+    assert "seed:" in md and "def (actual-side):" in md
+    assert DISCLAIMER.split(":")[0] in md                 # footer carries v1 disclaimer
+    assert "after the failing assertion line" in md       # line-filter honesty
+    assert len(lines) <= 45
+
+
+def test_render_low_confidence_and_na_accounting(tmp_path):
+    idx = load_index(_export(tmp_path))
+    fails = _fails(("p.TT.t2", _TRACE_T2))               # unresolved test method
+    rep_nomatrix = build_assertion_report(fails, idx, "p.", matrix=None, passing=[])
+    assert (rep_nomatrix.n_sliced, rep_nomatrix.n_na) == (0, 1)   # no matrix, not in CPG
+    rep_matrix = build_assertion_report(fails, idx, "p.", matrix=_MATRIX, passing=[])
+    assert (rep_matrix.n_sliced, rep_matrix.n_na) == (1, 0)       # joins via matrix
+    md = render_assertion(rep_matrix)
+    assert "ranking: FREQUENCY (LOW confidence)" in md
+    assert "Ochiai" not in md and "score" not in md       # no solid-looking numbers

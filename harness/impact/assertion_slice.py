@@ -249,9 +249,118 @@ def rank_candidates(slices, idx, package, matrix, passing,
     return cands, mode, notes
 
 
-def build_assertion_report(*args, **kwargs):  # implemented in Task 5
-    raise NotImplementedError
+def _disp(fqn):
+    cls, _, meth = fqn.rpartition(".")
+    return f"{cls.split('$')[-1].split('.')[-1]}.{meth}" if cls else fqn
 
 
-def render_assertion(*args, **kwargs):        # implemented in Task 5
-    raise NotImplementedError
+def _clip(s, n=80):
+    s = (s or "").replace("\n", "\\n")
+    return s if len(s) <= n else s[:n] + "…"
+
+
+def aggregate_boundary(slices):
+    agg = {}                        # fqn -> [BoundaryCall, {test ids}]
+    for s in slices:
+        for b in s.boundary:
+            cur = agg.get(b.fqn)
+            if cur is None:
+                agg[b.fqn] = [b, {s.test_id}]
+            else:
+                cur[1].add(s.test_id)
+                if b.label == "actual-side" and cur[0].label != "actual-side":
+                    cur[0] = b
+    items = [(bc, len(tests)) for bc, tests in agg.values()]
+    items.sort(key=lambda t: (t[0].label != "actual-side", -t[1], t[0].fqn))
+    return items
+
+
+def build_assertion_report(failures, idx, package, matrix=None, passing=(),
+                            project_root=None, k=3):
+    slices = [slice_failure(tid, cause, idx, package, project_root)
+              for tid, cause in failures]
+    n_sliced = sum(1 for s in slices if s.resolved or matrix is not None)
+    by_class = {}
+    for s in slices:
+        cls = s.test_id.rsplit(".", 1)[0] if "." in s.test_id else s.test_id
+        by_class[cls] = by_class.get(cls, 0) + 1
+    first = slices[0]
+    exc = first.cause.exc_type.rsplit(".", 1)[-1]
+    headline = f"{exc}: {_clip(first.cause.message)}" if first.cause.message else exc
+    candidates, mode, notes = rank_candidates(slices, idx, package, matrix, passing, k=k)
+    if matrix:
+        classes = {f.rsplit(".", 1)[0] for f in matrix}
+        tail = "cached artifact — may lag the working tree"
+        if len(classes) == 1:
+            simple = next(iter(classes)).split("$")[-1].split(".")[-1]
+            universe = f"{len(matrix)} methods ({simple}.*, {tail})"
+        else:
+            universe = f"{len(matrix)} methods ({len(classes)} classes, {tail})"
+    else:
+        universe = "no coverage matrix"
+    exemplar = (next((s for s in slices if s.seeds), None)
+                or next((s for s in slices if s.source_line), None))
+    return AssertionReport(len(slices), n_sliced, len(slices) - n_sliced, by_class,
+                           headline, aggregate_boundary(slices), candidates, mode,
+                           notes, universe, exemplar)
+
+
+_LOW_MODES = {"FREQUENCY", "BOUNDARY-ONLY"}
+_PATH_LABEL = "static path candidate, not runtime-proven"
+
+
+def render_assertion(report, max_lines=45):
+    conf = " (LOW confidence)" if report.ranking_mode in _LOW_MODES else ""
+    out = [f"# Crash slice — {report.n_failures} assertion failures",
+           f"_mode: ASSERTION · ranking: {report.ranking_mode}{conf} · "
+           f"universe: {report.universe} · "
+           "static corridor: possible, not proven executed_",
+           ""]
+    out.append(f"## Failure shape — {report.headline}")
+    out.append("- failing tests: " + ", ".join(
+        f"{cls.rsplit('.', 1)[-1]}: {n}" for cls, n in sorted(report.by_class.items())))
+    for note in report.notes:
+        out.append(f"- note: {note}")
+    out.append("")
+    if report.boundary:
+        out.append("## Boundary (where the failing tests enter production)")
+        for bc, n in report.boundary[:4]:
+            out.append(f"- [{bc.label}] `{bc.code}` @ L{bc.line} → {_disp(bc.fqn)} "
+                       f"({n} tests)")
+        out.append("")
+    if report.candidates:
+        out.append(f"## Suspect methods (top {len(report.candidates)}; {_PATH_LABEL})")
+        for i, c in enumerate(report.candidates, 1):
+            num = (f"score {c.score:.2f}" if report.ranking_mode == "CONTRAST"
+                   else f"failing-cov {c.ef}")
+            tagstr = "".join(f" [{t}]" for t in c.tags)
+            out.append(f"{i}. {_disp(c.fqn)} — {num}, ef={c.ef}/{report.n_failures}{tagstr}")
+            if c.path and len(c.path) > 1:
+                p = c.path if len(c.path) <= 5 else c.path[:2] + ["…"] + c.path[-2:]
+                out.append("   - path: " + " → ".join(_disp(x) if x != "…" else x
+                                                      for x in p))
+            for ln in c.lines:
+                out.append(f"   - `{ln}`")
+            for g in c.guards:
+                out.append(f"   - guard?: `{g}`")
+        out.append("")
+    if report.exemplar is not None:
+        e = report.exemplar
+        out.append(f"## Exemplar — {e.test_id}")
+        for s in e.seeds:
+            out.append(f"- seed: `{s}`")
+        for d in e.defs:
+            out.append(f"- def (actual-side): `{d}`")
+        for b in e.boundary[:2]:
+            out.append(f"- boundary [{b.label}]: `{b.code}` → {_disp(b.fqn)}")
+        if not e.seeds and e.source_line:
+            out.append(f"- src: `{e.source_line}`")
+        out.append("")
+    out.append(f"_{DISCLAIMER} Coverage is method-level from a cached artifact; "
+               "suspects are ranked by coverage agreement + static wiring, not "
+               "proven causes. Boundary excludes statements after the failing "
+               "assertion line (loop-body calls may still have run on earlier "
+               "iterations)._")
+    if len(out) > max_lines:
+        out = out[:max_lines - 1] + [f"… (truncated to {max_lines} lines)"]
+    return "\n".join(out) + "\n"
