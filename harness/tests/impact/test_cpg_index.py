@@ -63,12 +63,41 @@ def test_methods_named_and_call_map(tmp_path):
     assert idx.call_map["p.C.callee"] == {"p.C.foo"}
 
 
-def test_is_test_code_covers_helpers_in_test_files():
-    from harness.impact.cpg_index import CpgIndex
-    helper = {"properties": {"IS_TEST": False, "FILENAME": "src/__t__/java/p/HT.java"}}
-    prod = {"properties": {"IS_TEST": False, "FILENAME": "src/main/java/p/C.java"}}
-    flagged = {"properties": {"IS_TEST": True, "FILENAME": "src/main/java/p/G.java"}}
-    assert CpgIndex.is_test_code(helper)
-    assert not CpgIndex.is_test_code(prod)
-    assert CpgIndex.is_test_code(flagged)
-    assert not CpgIndex.is_test_code({"properties": {}})
+def test_is_test_code_covers_helpers_in_test_files(tmp_path):
+    import json
+    from harness.impact.cpg_index import load_index
+    # Export with one real @Test method (in __t__) and one synthesized helper
+    # (IS_TEST=false, FILENAME='<empty>') in the same class — the <empty>-FILENAME
+    # case is the picocli-measured leak: HelpTest.assertEquals/usageString.
+    data = {"vertices": [
+        {"id": "m_test", "label": "METHOD", "properties": {
+            "FULL_NAME": "p.HT.myTest:void()", "IS_TEST": True,
+            "FILENAME": "src/__t__/java/p/HT.java",
+            "LINE_NUMBER": 5, "LINE_NUMBER_END": 10}},
+        {"id": "m_helper", "label": "METHOD", "properties": {
+            "FULL_NAME": "p.HT.check:void(java.lang.String)", "IS_TEST": False,
+            "FILENAME": "<empty>", "LINE_NUMBER": 0, "LINE_NUMBER_END": 0}},
+        {"id": "m_prod", "label": "METHOD", "properties": {
+            "FULL_NAME": "p.C.run:void()", "IS_TEST": False,
+            "FILENAME": "src/main/java/p/C.java",
+            "LINE_NUMBER": 1, "LINE_NUMBER_END": 5}},
+    ], "edges": []}
+    f = tmp_path / "e.json"
+    f.write_text(json.dumps(data))
+    idx = load_index(f)
+    # IS_TEST=true -> test
+    assert idx.is_test_code({"properties": {"IS_TEST": True, "FULL_NAME": "p.X.x:void()"}})
+    # __t__ in FILENAME -> test
+    assert idx.is_test_code({"properties": {"IS_TEST": False,
+                                            "FULL_NAME": "p.HT.check:void(java.lang.String)",
+                                            "FILENAME": "src/__t__/java/p/HT.java"}})
+    # <empty> FILENAME but class p.HT is a test class (has __t__ sibling) -> test
+    assert idx.is_test_code({"properties": {"IS_TEST": False,
+                                            "FULL_NAME": "p.HT.check:void(java.lang.String)",
+                                            "FILENAME": "<empty>"}})
+    # production class -> not test
+    assert not idx.is_test_code({"properties": {"IS_TEST": False,
+                                                "FULL_NAME": "p.C.run:void()",
+                                                "FILENAME": "src/main/java/p/C.java"}})
+    # no properties -> not test
+    assert not idx.is_test_code({"properties": {}})

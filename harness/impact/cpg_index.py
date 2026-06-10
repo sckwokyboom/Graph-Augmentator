@@ -32,6 +32,17 @@ class CpgIndex:
         for m in self.methods:
             name = m["properties"].get("FULL_NAME", "").split(":", 1)[0]
             self._by_name[name].append(m)
+        # _test_classes: classes with at least one method in a __t__ source file.
+        # Joern synthesizes some helpers with FILENAME='<empty>' that belong to
+        # test classes (measured on picocli: HelpTest.assertEquals, .usageString).
+        # Class membership is the reliable fallback when FILENAME is absent.
+        self._test_classes: set = set()
+        for m in self.methods:
+            p = m.get("properties", {})
+            if "/__t__/" in (p.get("FILENAME") or ""):
+                cls = p.get("FULL_NAME", "").split(":", 1)[0].rsplit(".", 1)[0]
+                if cls:
+                    self._test_classes.add(cls)
         self._call_map = None               # lazy: method name -> {callee names}
 
     def resolve_method(self, cls, method, line=None):
@@ -54,16 +65,21 @@ class CpgIndex:
         """IS_TEST is a JSON boolean in the real export, a string elsewhere."""
         return str(method_vertex.get("properties", {}).get("IS_TEST")).lower() == "true"
 
-    @staticmethod
-    def is_test_code(method_vertex):
+    def is_test_code(self, method_vertex):
         """Test code = @Test-flagged (IS_TEST) OR declared in a test source file
-        (the export rewrites test dirs to src/__t__/...). The export sets IS_TEST
-        only on @Test methods, so plain helper methods of test classes need the
-        FILENAME marker — measured on picocli: HelpTest.usageString/assertEquals
-        carry IS_TEST=false."""
+        (the export rewrites test dirs to src/__t__/...) OR the declaring class
+        has any sibling method in a __t__ file (handles Joern-synthesized helpers
+        with FILENAME='<empty>' — measured on picocli: HelpTest.usageString and
+        HelpTest.assertEquals carry IS_TEST=false and FILENAME='<empty>')."""
         p = method_vertex.get("properties", {})
-        return (str(p.get("IS_TEST")).lower() == "true"
-                or "/__t__/" in (p.get("FILENAME") or ""))
+        if str(p.get("IS_TEST")).lower() == "true":
+            return True
+        fn = p.get("FILENAME") or ""
+        if "/__t__/" in fn:
+            return True
+        # Class-level fallback: if this class has any __t__-resident sibling.
+        cls = p.get("FULL_NAME", "").split(":", 1)[0].rsplit(".", 1)[0]
+        return cls in self._test_classes
 
     @staticmethod
     def map_filename(rel):
