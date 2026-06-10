@@ -28,7 +28,7 @@ from pathlib import Path
 
 GT_ROOT = Path(__file__).resolve().parents[2]
 
-_ABS = re.compile(r"(?:/Users/|/home/|[A-Za-z]:\\)[^\s'\"`)\]]+")
+_ABS = re.compile(r"(?<![\w./-])(?:/Users/|/home/|[A-Za-z]:\\)[^\s'\"`)\]]+")
 
 
 def scrub_paths(text: str, roots: list[str]) -> str:
@@ -38,6 +38,10 @@ def scrub_paths(text: str, roots: list[str]) -> str:
     if leftover:
         raise RuntimeError(f"absolute path(s) survived scrub: {leftover[:5]}")
     return text
+
+
+def parse_tests(value: str) -> list[str]:
+    return [t.strip() for t in value.split(",") if t.strip()]
 
 
 def gradlew_cmd(windows: bool = (os.name == "nt")) -> str:
@@ -181,7 +185,7 @@ def main(argv=None) -> int:
     ap.add_argument("--java-home", default=os.environ.get("JAVA_HOME"))
     a = ap.parse_args(argv)
     ctx = Ctx(a.project.resolve(), a.target_fqn, a.slice_target,
-              a.tests.split(","), a.out.resolve(), a.java_home,
+              parse_tests(a.tests), a.out.resolve(), a.java_home,
               a.with_mutation, a.force)
     (ctx.out / "slices").mkdir(parents=True, exist_ok=True)
     (ctx.out / "impact").mkdir(parents=True, exist_ok=True)
