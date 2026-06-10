@@ -28,6 +28,7 @@ class FailureSlice:
     cause: object
     frame: object                   # deepest project Frame or None
     resolved: bool = False          # test method found in CPG
+    seed_is_assertion: bool = False     # seeds came from assert*/fail* calls, not line-scan
     seeds: list = field(default_factory=list)
     defs: list = field(default_factory=list)
     boundary: list = field(default_factory=list)   # [BoundaryCall]
@@ -108,7 +109,9 @@ def slice_failure(test_id, cause, idx, package, project_root=None):
                 .split(":")[0].rsplit(".", 1)[-1].lower())
         return v.get("label") == "CALL" and name.startswith(_ASSERT_PREFIXES)
 
-    seeds = ([v for v in stmts if is_assert_call(v)] or stmts)[:3]
+    asserts = [v for v in stmts if is_assert_call(v)]
+    fs.seed_is_assertion = bool(asserts)
+    seeds = (asserts or stmts)[:3]
     sid = [v["id"] for v in seeds]
     corridor = [idx.vid[i] for i in _walk(idx.rev_rd, sid) if i in idx.vid]
     in_method = [v for v in corridor
@@ -277,6 +280,8 @@ def aggregate_boundary(slices):
 
 def build_assertion_report(failures, idx, package, matrix=None, passing=(),
                             project_root=None, k=3):
+    if not failures:
+        raise ValueError("build_assertion_report requires a non-empty failure set")
     slices = [slice_failure(tid, cause, idx, package, project_root)
               for tid, cause in failures]
     n_sliced = sum(1 for s in slices if s.resolved or matrix is not None)
@@ -321,6 +326,9 @@ def render_assertion(report, max_lines=45):
         f"{cls.rsplit('.', 1)[-1]}: {n}" for cls, n in sorted(report.by_class.items())))
     for note in report.notes:
         out.append(f"- note: {note}")
+    if report.ranking_mode == "FREQUENCY":
+        out.append("- note: failing-cov counts differ by test membership, not fault "
+                   "strength — treat small gaps as ties")
     out.append("")
     if report.boundary:
         out.append("## Boundary (where the failing tests enter production)")
@@ -347,8 +355,10 @@ def render_assertion(report, max_lines=45):
     if report.exemplar is not None:
         e = report.exemplar
         out.append(f"## Exemplar — {e.test_id}")
+        seed_label = ("seed" if e.seed_is_assertion
+                      else "seed (line-scan; no assertion call resolved at the failing line)")
         for s in e.seeds:
-            out.append(f"- seed: `{s}`")
+            out.append(f"- {seed_label}: `{s}`")
         for d in e.defs:
             out.append(f"- def (actual-side): `{d}`")
         for b in e.boundary[:2]:

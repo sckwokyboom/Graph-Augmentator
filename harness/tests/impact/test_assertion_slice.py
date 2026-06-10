@@ -195,3 +195,14 @@ def test_render_low_confidence_and_na_accounting(tmp_path):
     md = render_assertion(rep_matrix)
     assert "ranking: FREQUENCY (LOW confidence)" in md
     assert "Ochiai" not in md and "score" not in md       # no solid-looking numbers
+    assert "treat small gaps as ties" in md
+
+
+def test_exemplar_marks_non_assertion_seed(tmp_path):
+    idx = load_index(_export(tmp_path))
+    trace = _TRACE_T1.replace("TT.java:9", "TT.java:7")
+    fails = _fails(("p.TT.t1", trace))
+    report = build_assertion_report(fails, idx, "p.", matrix=_MATRIX, passing=_GREENS5)
+    assert report.exemplar is not None and not report.exemplar.seed_is_assertion
+    md = render_assertion(report)
+    assert "seed (line-scan; no assertion call resolved at the failing line):" in md
