@@ -110,5 +110,65 @@ def test_cli_on_xml_dir_writes_slice_and_applicability(tmp_path, capsys, monkeyp
         "--package", "p.", "--project", str(project), "--out", str(out)])
     main()
     captured = capsys.readouterr().out
-    assert "applicability: 1/1" in captured
+    assert ("applicability: 1 exception-sliced, 0 assertion-sliced, "
+            "0 not-applicable of 1 red tests") in captured
     assert "gt-crash-probe" in out.read_text()
+
+
+_ASSERT_TRACE = """org.junit.ComparisonFailure: expected:<1> but was:<2>
+\tat org.junit.Assert.assertEquals(Assert.java:117)
+\tat p.TableTest.testAdd(TableTest.java:7)
+"""
+
+
+def _mixed_xml(tmp_path, with_exception=True):
+    import xml.sax.saxutils as _sx
+    cases = []
+    if with_exception:
+        cases.append(f'<testcase classname="p.TableTest" name="boom">'
+                     f'<failure message="m" type="java.lang.IllegalStateException">{_sx.escape(_TRACE)}</failure>'
+                     f'</testcase>')
+    cases.append(f'<testcase classname="p.TableTest" name="testAdd">'
+                 f'<failure message="m" type="org.junit.ComparisonFailure">{_sx.escape(_ASSERT_TRACE)}</failure>'
+                 f'</testcase>')
+    cases += [f'<testcase classname="p.TableTest" name="g{i}"/>' for i in range(5)]
+    xdir = tmp_path / "results"
+    xdir.mkdir(exist_ok=True)
+    (xdir / "TEST-p.TableTest.xml").write_text(
+        "<testsuite>" + "".join(cases) + "</testsuite>")
+    return xdir
+
+
+def test_cli_mixed_dispatch_renders_both_sections(tmp_path, capsys, monkeypatch):
+    import sys
+    from harness.impact.crash_slice import main
+    export = _export(tmp_path)
+    project = _project(tmp_path)
+    xdir = _mixed_xml(tmp_path)
+    out = tmp_path / "crash.md"
+    monkeypatch.setattr(sys, "argv", [
+        "crash_slice", "--export", str(export), "--trace", str(xdir),
+        "--package", "p.", "--project", str(project), "--out", str(out)])
+    main()
+    captured = capsys.readouterr().out
+    assert ("applicability: 1 exception-sliced, 1 assertion-sliced, "
+            "0 not-applicable of 2 red tests") in captured
+    md = out.read_text()
+    assert "IllegalStateException" in md.splitlines()[0]       # exception slice first
+    assert "assertion failures" in md                          # assertion section follows
+    assert "## Suspect methods" in md and "addRowValues" in md  # boundary-only candidates
+
+
+def test_cli_pure_assertion_exits_zero(tmp_path, capsys, monkeypatch):
+    import sys
+    from harness.impact.crash_slice import main
+    export = _export(tmp_path)
+    project = _project(tmp_path)
+    xdir = _mixed_xml(tmp_path, with_exception=False)
+    out = tmp_path / "crash.md"
+    monkeypatch.setattr(sys, "argv", [
+        "crash_slice", "--export", str(export), "--trace", str(xdir),
+        "--package", "p.", "--project", str(project), "--out", str(out)])
+    main()                                                     # must NOT raise SystemExit
+    assert "1 assertion-sliced" in capsys.readouterr().out
+    assert "# Crash slice — 1 assertion failures" in out.read_text()
