@@ -122,3 +122,30 @@ brainstorm/spec/plan** carrying this measurement as justification. **G2 is re-sc
 generality measurement** on a second culprit (putValue indent-bump): applicability,
 boundary cleanliness, localization@k as a reported number (no top-3 pass/fail), ≤45 lines,
 <5 s, revert verified.
+
+**G2 result (measured 2026-06-10, re-scoped to generality):**
+
+- **Mutation:** `int indent = column.indent + 1; // gt-m5-indentbump` in `putValue` (TextTable, ~line 17421); method is `picocli.CommandLine$Help$TextTable.putValue`
+- **Red-test count:** 166 (164 HelpTest + 2 TextTableTest); all ComparisonFailure, zero exceptions
+- **Applicability (verbatim):** `applicability: 0 exception-sliced, 166 assertion-sliced, 0 not-applicable of 166 red tests`
+- **Artifact lines:** 32 (≤45 ✓)
+- **Wall-clock:** 0.634 s (<5 s ✓)
+- **Ranking mode:** CONTRAST (`|P|=100 >= min_contrast=5`); flat-marker note present ("coverage does not discriminate the top candidates")
+- **localization@k for putValue (exact rank in full reachable+score matrix):**
+  - Full matrix ranking (17 methods, reachable-first then -score then FQN):
+    `#1 toString (0.9853, ef=166, ep=5, R), #2 reindent (0.9796, ef=166, ep=7, R), #3 unindent (0.9796, ef=166, ep=7, R), #4 addEmptyRow (0.9767, ef=166, ep=8, R), #5 addRowValues (0.9767, ef=166, ep=8, R), #6 putValue (0.9739, ef=166, ep=9, R), #7 rowCount (0.9739, ef=166, ep=9, R), ...`
+  - **putValue rank = #6** (first rank outside the top-3 display); **localization@1=0, localization@3=0, localization@5=0, localization@6=1**
+  - Note: ep=9 for putValue vs ep=5 for toString; the delta traces to 4 additional tests that exercise putValue error paths (DisallowsInvalidRowIndex, NullOrEmpty, testTextTableAddRowValues, testTextTableCellAt) which pass under the mutation because they test error/null handling, not text formatting. This is a structurally expected ep inflation for the mutated method.
+- **Tool top-3 (verbatim):**
+  1. `TextTable.toString — score 0.99, ef=166/166`
+  2. `TextTable.reindent — score 0.98, ef=166/166`
+  3. `TextTable.unindent — score 0.98, ef=166/166`
+  (Tool shows k=3; full rank obtained by re-running rank_candidates with k=17)
+- **Boundary section quality:** 4 entries, all production methods (getUsageMessage, Help.synopsis, Layout.toString, TextTable.toString) — no test-helper leak; 100% production ✓
+  - Verbatim: `[actual-side] new CommandLine(rootCmd).getUsageMessage() @ L3800 → CommandLine.getUsageMessage (35 tests)`, `[actual-side] help.synopsis(0) @ L3578 → Help.synopsis (21 tests)`, `[actual-side] layout.toString() @ L5177 → Layout.toString (4 tests)`, `[actual-side] table.toString(new StringBuilder()) @ L3559 → TextTable.toString (3 tests)`
+  - TextTable.toString IS in the boundary surface (3 tests enter via direct toString call); putValue itself is not a boundary entry (it is called deeper in the rendering path, not directly from test code).
+- **Exemplar:** `picocli.HelpTest.testUsageFixedArityShortOptionArray` — seed is a real assertion call (`assertEquals(expected, usageString(...))`), actual-side def present, boundary call present. Exemplar present and correctly labeled ✓
+- **Revert verified:** grep count=0 for gt-m5-indentbump after revert; TextTableTest green (BUILD SUCCESSFUL) ✓
+- **XML-overwrite note:** The step-5 TextTableTest re-run (green, post-revert) overwrote the G2 red XMLs. The G1 cellswap XMLs were already overwritten earlier by the G2 red run. Both G1 and G2 raw XML corpora are gone from disk; all measurements are recorded above and in prior spec entries. Do NOT re-run G1 against the current build/test-results directory.
+
+**Interpretation (2-3 sentences):** The G1 saturation finding generalizes exactly as expected: the flat-marker fires on the G2 corpus too, all 11 saturated methods score ef=166/166, and the non-discrimination note appears. The boundary surfaces production-only entries across both corpora (no test-helper leak on either run), confirming the line-filter fix holds. putValue lands at rank #6 rather than top-3 — not because the tool loses the culprit, but because putValue accumulates 4 additional passing-test hits on its error-path tests (ep=9 vs toString's ep=5), which is structurally expected: the mutated method has its own dedicated error-path unit tests that pass under this particular mutation, inflating ep and deflating Ochiai score relative to downstream formatting callees. This is honest behavior: the tool correctly identifies the entire saturated cluster, clearly discloses non-discrimination, and putValue is rank #6 of 17 in the full universe — still top-third, with the caveat that a wider universe (build_all) would provide the true test of localization power.
