@@ -169,3 +169,50 @@ def render(cause, frame_slices, max_lines=45):
     if len(out) > max_lines:
         out = out[:max_lines - 1] + [f"… (truncated to {max_lines} lines)"]
     return "\n".join(out) + "\n"
+
+
+def main():
+    import argparse
+    from harness.impact.cpg_index import load_index
+    from harness.impact.stack_parse import parse_trace, pick_root_cause, failures_from_xml
+    p = argparse.ArgumentParser(description="Crash-slice for an exception test failure")
+    p.add_argument("--export", required=True, help="CPG export.json")
+    p.add_argument("--trace", required=True,
+                   help="raw-trace file, a TEST-*.xml, or a gradle test-results dir")
+    p.add_argument("--package", required=True, help="project package prefix, e.g. picocli.")
+    p.add_argument("--project", default=None, help="source root for FALLBACK line quotes")
+    p.add_argument("--out", required=True)
+    p.add_argument("--frames", type=int, default=6)
+    a = p.parse_args()
+    idx = load_index(a.export)
+    tp = Path(a.trace)
+    if tp.is_dir():
+        texts = [t for x in sorted(tp.glob("TEST-*.xml")) for _, t in failures_from_xml(x)]
+    elif tp.suffix == ".xml":
+        texts = [t for _, t in failures_from_xml(tp)]
+    else:
+        texts = [tp.read_text()]
+    total = applicable = 0
+    sliced = None
+    for t in texts:
+        total += 1
+        cause = pick_root_cause(parse_trace(t), a.package)
+        if cause is None:
+            continue
+        try:
+            c, fss = build_slice(cause, idx, a.package, a.project, a.frames)
+        except AssertionCaseError:
+            continue
+        applicable += 1
+        if sliced is None:
+            sliced = render(c, fss)
+    print(f"applicability: {applicable}/{total} red tests applicable "
+          "(exception with production frame)")
+    if sliced is None:
+        raise SystemExit("no applicable exception failure found (assertion failures are v2)")
+    Path(a.out).write_text(sliced)
+    print(f"wrote {a.out}")
+
+
+if __name__ == "__main__":
+    main()

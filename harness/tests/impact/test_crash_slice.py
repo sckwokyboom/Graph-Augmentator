@@ -89,3 +89,24 @@ def test_assertion_case_detected(tmp_path):
     cause = pick_root_cause(parse_trace(trace), "p.")
     with pytest.raises(AssertionCaseError):
         build_slice(cause, idx, "p.")
+
+
+def test_cli_on_xml_dir_writes_slice_and_applicability(tmp_path, capsys, monkeypatch):
+    import sys
+    from harness.impact.crash_slice import main
+    export = _export(tmp_path)
+    project = _project(tmp_path)
+    xml = f"""<testsuite><testcase classname="p.TableTest" name="testAdd">
+<failure message="m" type="java.lang.IllegalStateException">{_TRACE}</failure>
+</testcase></testsuite>"""
+    xdir = tmp_path / "results"
+    xdir.mkdir()
+    (xdir / "TEST-p.TableTest.xml").write_text(xml)
+    out = tmp_path / "crash.md"
+    monkeypatch.setattr(sys, "argv", [
+        "crash_slice", "--export", str(export), "--trace", str(xdir),
+        "--package", "p.", "--project", str(project), "--out", str(out)])
+    main()
+    captured = capsys.readouterr().out
+    assert "applicability: 1/1" in captured
+    assert "gt-crash-probe" in out.read_text()
