@@ -47,6 +47,13 @@ def test_bytebuddy_locator_prefers_pinned(tmp_path, monkeypatch):
     monkeypatch.setattr(pa.Path, "home", staticmethod(lambda: tmp_path))
     assert pa.find_bytebuddy().name == "byte-buddy-1.14.18.jar"
 
+def test_bytebuddy_locator_ignores_unpinned(tmp_path, monkeypatch):
+    cache = tmp_path / ".gradle" / "caches" / "x"
+    cache.mkdir(parents=True)
+    (cache / "byte-buddy-1.20.0.jar").write_bytes(b"")
+    monkeypatch.setattr(pa.Path, "home", staticmethod(lambda: tmp_path))
+    assert pa.find_bytebuddy() is None
+
 def test_agent_manifest_content():
     assert "Premain-Class: gtcov.Agent" in pa.AGENT_MANIFEST
     assert "Can-Retransform-Classes: true" in pa.AGENT_MANIFEST

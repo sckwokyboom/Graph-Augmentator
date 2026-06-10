@@ -138,12 +138,9 @@ AGENT_DIR = GT_ROOT / "harness" / "impact" / "producers" / "coverage-agent"
 
 
 def find_bytebuddy() -> Path | None:
+    """Exact pinned version from the gradle cache, else None (caller downloads the pin)."""
     hits = sorted(Path.home().glob(f".gradle/caches/**/byte-buddy-{BB_VERSION}.jar"))
-    if hits:
-        return hits[0]
-    hits = [p for p in Path.home().glob(".gradle/caches/**/byte-buddy-*.jar")
-            if "agent" not in p.name and "dep" not in p.name]
-    return sorted(hits)[0] if hits else None
+    return hits[0] if hits else None
 
 
 def _jdk_tool(c: Ctx, name: str) -> str:
