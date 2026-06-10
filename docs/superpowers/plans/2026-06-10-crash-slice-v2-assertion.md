@@ -27,7 +27,7 @@
 - Modify: `harness/impact/cpg_index.py`
 - Test: `harness/tests/impact/test_cpg_index.py` (append)
 
-- [ ] **Step 1: Append failing tests**
+- [x] **Step 1: Append failing tests**
 
 Append to `harness/tests/impact/test_cpg_index.py`:
 
@@ -55,12 +55,12 @@ def test_methods_named_and_call_map(tmp_path):
     assert idx.call_map["p.C.callee"] == {"p.C.foo"}
 ```
 
-- [ ] **Step 2: Run to verify the new tests fail**
+- [x] **Step 2: Run to verify the new tests fail**
 
 Run: `PYTHONPATH=. python3 -m pytest harness/tests/impact/test_cpg_index.py -q`
 Expected: 2 prior pass, 3 new FAIL with AttributeError (`is_test` not defined).
 
-- [ ] **Step 3: Implement the additions**
+- [x] **Step 3: Implement the additions**
 
 In `harness/impact/cpg_index.py`, inside `class CpgIndex`:
 
@@ -103,12 +103,12 @@ After `statements_at`, add these methods:
         return self._call_map
 ```
 
-- [ ] **Step 4: Run to verify it passes**
+- [x] **Step 4: Run to verify it passes**
 
 Run: `PYTHONPATH=. python3 -m pytest harness/tests/impact/test_cpg_index.py -q`
 Expected: 5 passed.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add harness/impact/cpg_index.py harness/tests/impact/test_cpg_index.py
@@ -123,7 +123,7 @@ git commit -m "feat(impact): cpg_index — is_test/map_filename helpers, methods
 - Modify: `harness/impact/stack_parse.py`
 - Test: `harness/tests/impact/test_stack_parse.py` (append)
 
-- [ ] **Step 1: Append failing test**
+- [x] **Step 1: Append failing test**
 
 ```python
 def test_testcases_from_xml_pass_fail_and_skip(tmp_path):
@@ -143,12 +143,12 @@ def test_testcases_from_xml_pass_fail_and_skip(tmp_path):
     assert all(n != "ign" for _, n, _, _ in cases)
 ```
 
-- [ ] **Step 2: Run to verify it fails**
+- [x] **Step 2: Run to verify it fails**
 
 Run: `PYTHONPATH=. python3 -m pytest harness/tests/impact/test_stack_parse.py -q`
 Expected: 3 prior pass, 1 new FAIL (ImportError: cannot import name `testcases_from_xml`).
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 Append to `harness/impact/stack_parse.py`:
 
@@ -172,12 +172,12 @@ def testcases_from_xml(path):
     return out
 ```
 
-- [ ] **Step 4: Run to verify it passes**
+- [x] **Step 4: Run to verify it passes**
 
 Run: `PYTHONPATH=. python3 -m pytest harness/tests/impact/test_stack_parse.py -q`
 Expected: 4 passed.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add harness/impact/stack_parse.py harness/tests/impact/test_stack_parse.py
@@ -194,7 +194,7 @@ git commit -m "feat(impact): stack_parse — testcases_from_xml (pass/fail rows 
 
 The fixture mirrors the cellswap shape: a test method whose assertion's REACHING_DEF reaches the actual-side call (`tbl.get()` → label `actual-side`), a receiver-mutating call reachable only by line-scan (`tbl.add(...)` → `prior-call`), a production call AFTER the assertion line (`tbl.flush()` → must be excluded), a test-helper call (unresolved `mk()` → skipped), and a second failing test whose method is NOT in the CPG (joins ranking via the matrix only).
 
-- [ ] **Step 1: Write failing tests (new file with the shared fixture)**
+- [x] **Step 1: Write failing tests (new file with the shared fixture)**
 
 Create `harness/tests/impact/test_assertion_slice.py`:
 
@@ -317,12 +317,12 @@ def test_unresolved_test_method_falls_back(tmp_path):
     assert not fs.resolved and fs.seeds == [] and fs.boundary == []
 ```
 
-- [ ] **Step 2: Run to verify it fails**
+- [x] **Step 2: Run to verify it fails**
 
 Run: `PYTHONPATH=. python3 -m pytest harness/tests/impact/test_assertion_slice.py -q`
 Expected: ImportError (module not found).
 
-- [ ] **Step 3: Implement the module (per-failure part + dataclasses; ranking/render stubs come in Tasks 4–5)**
+- [x] **Step 3: Implement the module (per-failure part + dataclasses; ranking/render stubs come in Tasks 4–5)**
 
 Create `harness/impact/assertion_slice.py`:
 
@@ -469,7 +469,7 @@ def slice_failure(test_id, cause, idx, package, project_root=None):
     return fs
 ```
 
-- [ ] **Step 4: Run to verify the two tests pass**
+- [x] **Step 4: Run to verify the two tests pass**
 
 Run: `PYTHONPATH=. python3 -m pytest harness/tests/impact/test_assertion_slice.py -q`
 Expected: 2 passed (the other imports — `rank_candidates` etc. — don't exist yet; if collection fails on them, temporarily they are absent from this file's imports? No: the test file imports them at the top — so ADD STUBS now):
@@ -492,7 +492,7 @@ def render_assertion(*args, **kwargs):        # implemented in Task 5
 Re-run: `PYTHONPATH=. python3 -m pytest harness/tests/impact/test_assertion_slice.py -q`
 Expected: 2 passed.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add harness/impact/assertion_slice.py harness/tests/impact/test_assertion_slice.py
@@ -507,7 +507,7 @@ git commit -m "feat(impact): assertion_slice — per-failure slice: assert seed,
 - Modify: `harness/impact/assertion_slice.py` (replace the `rank_candidates` stub)
 - Test: `harness/tests/impact/test_assertion_slice.py` (append)
 
-- [ ] **Step 1: Append failing tests**
+- [x] **Step 1: Append failing tests**
 
 ```python
 def _slices(tmp_path, idx=None):
@@ -553,12 +553,12 @@ def test_boundary_only_mode_without_matrix(tmp_path):
     assert any("direct callee" in t for t in callee.tags)
 ```
 
-- [ ] **Step 2: Run to verify they fail**
+- [x] **Step 2: Run to verify they fail**
 
 Run: `PYTHONPATH=. python3 -m pytest harness/tests/impact/test_assertion_slice.py -q`
 Expected: 2 pass, 3 FAIL with NotImplementedError.
 
-- [ ] **Step 3: Replace the `rank_candidates` stub**
+- [x] **Step 3: Replace the `rank_candidates` stub**
 
 ```python
 def _reach(call_map, roots, hops):
@@ -668,12 +668,12 @@ def rank_candidates(slices, idx, package, matrix, passing,
     return cands, mode, notes
 ```
 
-- [ ] **Step 4: Run to verify the suite passes**
+- [x] **Step 4: Run to verify the suite passes**
 
 Run: `PYTHONPATH=. python3 -m pytest harness/tests/impact/test_assertion_slice.py -q`
 Expected: 5 passed.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add harness/impact/assertion_slice.py harness/tests/impact/test_assertion_slice.py
@@ -688,7 +688,7 @@ git commit -m "feat(impact): assertion_slice — coverage x reachability ranking
 - Modify: `harness/impact/assertion_slice.py` (replace the two remaining stubs)
 - Test: `harness/tests/impact/test_assertion_slice.py` (append)
 
-- [ ] **Step 1: Append failing tests**
+- [x] **Step 1: Append failing tests**
 
 ```python
 def test_report_and_render_contrast(tmp_path):
@@ -727,12 +727,12 @@ def test_render_low_confidence_and_na_accounting(tmp_path):
 
 From the docstring contract in Task 4: with `passing=[]` the mode is FREQUENCY (|P|=0 < 5).
 
-- [ ] **Step 2: Run to verify they fail**
+- [x] **Step 2: Run to verify they fail**
 
 Run: `PYTHONPATH=. python3 -m pytest harness/tests/impact/test_assertion_slice.py -q`
 Expected: 5 pass, 2 FAIL with NotImplementedError.
 
-- [ ] **Step 3: Replace the two stubs**
+- [x] **Step 3: Replace the two stubs**
 
 ```python
 def _disp(fqn):
@@ -854,12 +854,12 @@ def render_assertion(report, max_lines=45):
 
 Note: `test_render_low_confidence_and_na_accounting` asserts `"score" not in md` — the FREQUENCY branch prints `failing-cov N`, never the word `score`. If the exemplar is None (t2 unresolved, no seeds, no source line on a tmp project), the Exemplar section is simply absent — that is the intended degradation.
 
-- [ ] **Step 4: Run the full suite**
+- [x] **Step 4: Run the full suite**
 
 Run: `PYTHONPATH=. python3 -m pytest harness/tests/impact/ -q`
 Expected: 49 prior + 3 (T1) + 1 (T2) + 2 (T3) + 3 (T4) + 2 (T5) = 60 passed.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add harness/impact/assertion_slice.py harness/tests/impact/test_assertion_slice.py
@@ -874,7 +874,7 @@ git commit -m "feat(impact): assertion_slice — aggregated report + honest 45-l
 - Modify: `harness/impact/crash_slice.py` (replace `main`; swap one inline check in `build_slice`)
 - Test: `harness/tests/impact/test_crash_slice.py` (append two tests; update ONE existing assertion)
 
-- [ ] **Step 1: Append failing tests + update the v1 CLI assertion**
+- [x] **Step 1: Append failing tests + update the v1 CLI assertion**
 
 Append to `harness/tests/impact/test_crash_slice.py`:
 
@@ -952,12 +952,12 @@ with:
 
 (The applicability-line format change is the intentional contract change pinned in the spec.)
 
-- [ ] **Step 2: Run to verify they fail**
+- [x] **Step 2: Run to verify they fail**
 
 Run: `PYTHONPATH=. python3 -m pytest harness/tests/impact/test_crash_slice.py -q`
 Expected: the updated v1 CLI test + 2 new tests FAIL (old applicability format; no dispatch).
 
-- [ ] **Step 3: Replace `main` (and the inline IS_TEST check) in `crash_slice.py`**
+- [x] **Step 3: Replace `main` (and the inline IS_TEST check) in `crash_slice.py`**
 
 In `build_slice`, replace:
 
@@ -1059,12 +1059,12 @@ def main():
     print(f"wrote {a.out}")
 ```
 
-- [ ] **Step 4: Run the full suite**
+- [x] **Step 4: Run the full suite**
 
 Run: `PYTHONPATH=. python3 -m pytest harness/tests/impact/ -q`
 Expected: 62 passed (60 + 2 new CLI tests; the updated v1 CLI test stays green).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add harness/impact/crash_slice.py harness/tests/impact/test_crash_slice.py
@@ -1078,7 +1078,7 @@ git commit -m "feat(impact): crash_slice dispatch — exception/assertion/not-ap
 **Files:**
 - Modify: `integrations/opencode/tools/crash_slice.ts`
 
-- [ ] **Step 1: Update the tool**
+- [x] **Step 1: Update the tool**
 
 In `integrations/opencode/tools/crash_slice.ts`:
 
@@ -1132,12 +1132,12 @@ with:
       // set without a matrix) — surface stdout+stderr verbatim.
 ```
 
-- [ ] **Step 2: Verify the file parses (no ts toolchain in repo — syntax smoke via bun if present, else skip)**
+- [x] **Step 2: Verify the file parses (no ts toolchain in repo — syntax smoke via bun if present, else skip)**
 
 Run: `bun build --no-bundle integrations/opencode/tools/crash_slice.ts >/dev/null 2>&1 && echo OK || echo "bun unavailable — gate validates the CLI invocation instead"`
 Expected: `OK` or the fallback message (both acceptable; G1 runs the exact command the tool builds).
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add integrations/opencode/tools/crash_slice.ts
@@ -1150,7 +1150,7 @@ git commit -m "feat(impact): crash_slice OpenCode tool — assertion coverage pa
 
 **Files:** none (validation; results recorded in the spec).
 
-- [ ] **Step 1: Run the CLI over the on-disk corpus (the exact command the OpenCode tool builds)**
+- [x] **Step 1: Run the CLI over the on-disk corpus (the exact command the OpenCode tool builds)**
 
 ```bash
 cd /Users/sckwoky/Projects/Graph-Tipper
@@ -1164,7 +1164,7 @@ cat /tmp/crash-assertion-g1.md
 wc -l /tmp/crash-assertion-g1.md
 ```
 
-- [ ] **Step 2: Check criteria (a)–(f) + localization@k**
+- [x] **Step 2: Check criteria (a)–(f) + localization@k**
 
 - (a) a candidate line for `TextTable.addRowValues` appears in `## Suspect methods` at rank ≤3 — record the EXACT rank (localization@1/@3/@5);
 - (b) `wc -l` ≤ 45;
@@ -1175,7 +1175,7 @@ wc -l /tmp/crash-assertion-g1.md
 
 If any criterion fails: diagnose by measurement FIRST (print the ranking table with ef/ep per matrix method; print the boundary set and the BFS frontier per hop) before touching design. If the miss is "coverage cannot discriminate addRowValues from its TextTable neighbors" — that is the measured v2.1 trigger; record it in the spec verbatim.
 
-- [ ] **Step 3: Record G1 results in the spec and commit**
+- [x] **Step 3: Record G1 results in the spec and commit**
 
 Append measured numbers (rank, lines, time, applicability, mode) to the `## Validation gate` section of `docs/superpowers/specs/2026-06-10-crash-slice-v2-assertion-design.md`:
 
@@ -1190,7 +1190,7 @@ git commit -m "docs(spec): crash-slice v2 G1 results on cellswap (measured)"
 
 **Files:** none (validation; picocli mutated then reverted).
 
-- [ ] **Step 1: Verify the picocli baseline is green where it matters**
+- [x] **Step 1: Verify the picocli baseline is green where it matters**
 
 ```bash
 cd ~/gt-eval/picocli && git status --short src/main/java/picocli/CommandLine.java
@@ -1199,7 +1199,7 @@ cd ~/gt-eval/picocli && git status --short src/main/java/picocli/CommandLine.jav
 
 Expected: TextTableTest green (BUILD SUCCESSFUL). If RED → the working tree still carries an old mutant; STOP and surface to the user before proceeding (do not "fix" the tree silently).
 
-- [ ] **Step 2: Inject the indent-bump mutation inside putValue**
+- [x] **Step 2: Inject the indent-bump mutation inside putValue**
 
 ```bash
 python3 - <<'PY'
@@ -1218,7 +1218,7 @@ PY
 
 (The two-line anchor `Column column = columns[col];` + `int indent = column.indent;` exists exactly once — at the head of `putValue` (line ~17421). The mutation shifts every rendered cell by one space: assertion-type output change, no exception; the mutated method is `putValue` — a different culprit than G1's `addRowValues`.)
 
-- [ ] **Step 3: Produce the red corpus (the agent-cycle run G2 simulates)**
+- [x] **Step 3: Produce the red corpus (the agent-cycle run G2 simulates)**
 
 ```bash
 cd ~/gt-eval/picocli && ./gradlew :test --tests 'picocli.TextTableTest' --tests 'picocli.HelpTest' --rerun-tasks --console=plain; cd -
@@ -1227,7 +1227,7 @@ grep -h -c '<failure' ~/gt-eval/picocli/build/test-results/test/TEST-*.xml
 
 Expected: BUILD FAILED; total failures ≥ 20, dominated by `ComparisonFailure`. If < 20, the mutation is too weak — STOP and report the measured count (do not invent a different mutation without recording this one's result).
 
-- [ ] **Step 4: Run the tool and check criteria**
+- [x] **Step 4: Run the tool and check criteria**
 
 ```bash
 cd /Users/sckwoky/Projects/Graph-Tipper
@@ -1243,7 +1243,7 @@ wc -l /tmp/crash-assertion-g2.md
 
 Criteria: (a) `TextTable.putValue` in top-3 with exact rank recorded (localization@k); (b) ≤45 lines; (c) <5 s; (d) applicability all-assertion with 0 exception-sliced; (e) exemplar present; mode `CONTRAST`. Same diagnose-by-measurement rule as G1 on any failure.
 
-- [ ] **Step 5: Revert picocli and verify**
+- [x] **Step 5: Revert picocli and verify**
 
 ```bash
 python3 - <<'PY'
@@ -1260,7 +1260,7 @@ cd ~/gt-eval/picocli && ./gradlew :test --tests 'picocli.TextTableTest' --rerun-
 
 Expected: `clean`, TextTableTest green again.
 
-- [ ] **Step 6: Record G2 results in the spec and commit**
+- [x] **Step 6: Record G2 results in the spec and commit**
 
 Append measured G2 numbers (rank of putValue, red-test count, lines, time, mode) to the spec's `## Validation gate` section:
 
@@ -1287,3 +1287,16 @@ git commit -m "docs(spec): crash-slice v2 G2 results on putValue indent-bump mut
 **Placeholder scan:** all steps carry complete code/commands; Task 3 Step 4 explicitly adds the stubs the tests import (replaced in Tasks 4–5); gates pin concrete pass criteria and the diagnose-by-measurement rule.
 
 **Type consistency:** `slice_failure(test_id, cause, idx, package, project_root=None) -> FailureSlice(test_id, cause, frame, resolved, seeds, defs, boundary[BoundaryCall(fqn, code, line, label)], source_line)`; `rank_candidates(slices, idx, package, matrix, passing, k=3, hops=3, eps=0.05, min_contrast=5) -> (cands[Candidate], mode, notes)`; `build_assertion_report(failures[(test_id, Cause)], idx, package, matrix, passing, project_root, k) -> AssertionReport`; `render_assertion(report, max_lines=45) -> str` — used identically in Tasks 3–6 and tests. CpgIndex additions (`is_test`, `map_filename`, `methods_named`, `call_map`) defined in Task 1, consumed in Tasks 3–4, 6. `testcases_from_xml -> [(classname, name, passed, text)]` defined in Task 2, consumed in Task 6. Expected test counts: 49 → 52 (T1) → 53 (T2) → 55 (T3) → 58 (T4) → 60 (T5) → 62 (T6).
+
+---
+
+**Executed 2026-06-10 (subagent-driven):** Tasks 1–9 complete; suite 60→76 in-branch (plan's
+49→62 arithmetic predates 11 tests from a parallel stream + 3 review-round tests). Review
+rounds added: testcases_from_xml hardening, line=-1 doc + s_norm pin, exemplar seed marker +
+FREQUENCY softening + empty-input guard, ranked-only applicability split + coverage warning.
+G1: criteria (b)–(f) passed; (a) measured-failed at rank 7 → user re-framed the gate (v2.1
+trigger recorded in spec); gate caught 2 real boundary bugs (IS_TEST-only-@Test leak, Joern
+empty-FILENAME helpers) — both fixed+pinned. G2 (re-scoped, generality): 166/166 applicable,
+putValue rank 6/17 (its own error-path tests pass under the mutation → ep inflation — measured
+SBFL pathology), boundary 100% production, revert verified. Details: the spec's Validation gate
+section.

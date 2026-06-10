@@ -124,8 +124,8 @@ def build_slice(cause, idx, package, project_root=None, k=6):
         raise ValueError(f"no frames under package {package!r} in the root cause")
     deepest = frames[0]
     m0 = idx.resolve_method(deepest.cls, deepest.method, deepest.line)
-    # IS_TEST is a JSON boolean in the real export (and may be a string elsewhere)
-    if m0 is not None and str(m0["properties"].get("IS_TEST")).lower() == "true":
+    from harness.impact.cpg_index import CpgIndex
+    if m0 is not None and CpgIndex.is_test(m0):
         raise AssertionCaseError(
             f"deepest project frame {deepest.cls}.{deepest.method} is test code — "
             "assertion-failure slicing is v2; v1 handles exceptions thrown from "
@@ -181,44 +181,93 @@ def render(cause, frame_slices, max_lines=45):
 
 def main():
     import argparse
-    from harness.impact.cpg_index import load_index
-    from harness.impact.stack_parse import parse_trace, pick_root_cause, failures_from_xml
-    p = argparse.ArgumentParser(description="Crash-slice for an exception test failure")
+    import sys
+    import json as _json
+    from harness.impact.assertion_slice import build_assertion_report, render_assertion
+    from harness.impact.cpg_index import CpgIndex, load_index
+    from harness.impact.stack_parse import parse_trace, pick_root_cause, testcases_from_xml
+    p = argparse.ArgumentParser(
+        description="Crash-slice for red tests (exception + assertion failures)")
     p.add_argument("--export", required=True, help="CPG export.json")
     p.add_argument("--trace", required=True,
                    help="raw-trace file, a TEST-*.xml, or a gradle test-results dir")
     p.add_argument("--package", required=True, help="project package prefix, e.g. picocli.")
     p.add_argument("--project", default=None, help="source root for FALLBACK line quotes")
+    p.add_argument("--coverage", default=None,
+                   help="per-test coverage.json (method -> [tests]); defaults to "
+                        "<project>/.impact/coverage.json when --project is set")
     p.add_argument("--out", required=True)
     p.add_argument("--frames", type=int, default=6)
+    p.add_argument("--top", type=int, default=3, help="ranked suspect methods to render")
     a = p.parse_args()
     idx = load_index(a.export)
     tp = Path(a.trace)
     if tp.is_dir():
-        texts = [t for x in sorted(tp.glob("TEST-*.xml")) for _, t in failures_from_xml(x)]
+        cases = [c for x in sorted(tp.glob("TEST-*.xml")) for c in testcases_from_xml(x)]
     elif tp.suffix == ".xml":
-        texts = [t for _, t in failures_from_xml(tp)]
+        cases = testcases_from_xml(tp)
     else:
-        texts = [tp.read_text()]
-    total = applicable = 0
-    sliced = None
-    for t in texts:
-        total += 1
-        cause = pick_root_cause(parse_trace(t), a.package)
+        cases = [("", tp.stem, False, tp.read_text())]
+    passing = [f"{cls}.{name}" for cls, name, ok, _ in cases if ok]
+    reds = [(cls, name, text) for cls, name, ok, text in cases if not ok]
+
+    first_exc = None
+    n_exc = n_na = 0
+    assertion_failures = []
+    for cls, name, text in reds:
+        cause = pick_root_cause(parse_trace(text), a.package)
         if cause is None:
+            n_na += 1
+            continue
+        f0 = next(f for f in cause.frames if f.cls.startswith(a.package))
+        m0 = idx.resolve_method(f0.cls, f0.method, f0.line)
+        test_id = f"{cls}.{name}" if cls else name
+        if (m0 is not None and CpgIndex.is_test(m0)) or (m0 is None and cls and f0.cls == cls):
+            assertion_failures.append((test_id, cause))
             continue
         try:
             c, fss = build_slice(cause, idx, a.package, a.project, a.frames)
+        # Defensive backstop: pre-classification above uses the same resolve as
+        # build_slice, so this should be unreachable — kept in case they diverge.
         except AssertionCaseError:
+            assertion_failures.append((test_id, cause))
             continue
-        applicable += 1
-        if sliced is None:
-            sliced = render(c, fss)
-    print(f"applicability: {applicable}/{total} red tests applicable "
-          "(exception with production frame)")
-    if sliced is None:
-        raise SystemExit("no applicable exception failure found (assertion failures are v2)")
-    Path(a.out).write_text(sliced)
+        n_exc += 1
+        if first_exc is None:
+            first_exc = (c, fss)
+
+    report = None
+    if assertion_failures:
+        cov = a.coverage or (str(Path(a.project) / ".impact" / "coverage.json")
+                             if a.project else None)
+        matrix = None
+        if cov and Path(cov).exists():
+            matrix = _json.loads(Path(cov).read_text())
+        elif a.coverage:
+            # explicit path missing is a config error worth surfacing; the silent
+            # default-path-absent case is expected (degrades to BOUNDARY-ONLY)
+            print(f"warning: --coverage {a.coverage} not found — "
+                  "falling back to boundary-only localization", file=sys.stderr)
+        report = build_assertion_report(assertion_failures, idx, a.package,
+                                        matrix=matrix, passing=passing,
+                                        project_root=a.project, k=a.top)
+        n_na += report.n_na
+    n_assert = report.n_sliced if report else 0
+
+    ranked_only = report.n_ranked_only if report else 0
+    suffix = f" ({ranked_only} ranked-only)" if ranked_only else ""
+    print(f"applicability: {n_exc} exception-sliced, {n_assert} assertion-sliced{suffix}, "
+          f"{n_na} not-applicable of {len(reds)} red tests")
+    parts = []
+    if first_exc is not None:
+        parts.append(render(*first_exc, max_lines=30 if (report and report.n_sliced) else 45))
+    if report is not None and report.n_sliced > 0:
+        budget = 45 if not parts else max(15, 45 - len(parts[0].splitlines()))
+        parts.append(render_assertion(report, max_lines=budget))
+    if not parts:
+        raise SystemExit("no applicable red-test failure found (no project frames, "
+                         "or assertion failures unresolvable without a coverage matrix)")
+    Path(a.out).write_text("\n".join(parts))
     print(f"wrote {a.out}")
 
 

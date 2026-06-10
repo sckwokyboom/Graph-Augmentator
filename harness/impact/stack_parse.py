@@ -64,3 +64,27 @@ def failures_from_xml(path):
         for f in list(tc.findall("failure")) + list(tc.findall("error")):
             out.append((f'{tc.get("classname")}.{tc.get("name")}', f.text or ""))
     return out
+
+
+def testcases_from_xml(path):
+    """gradle TEST-*.xml -> [(classname, name, passed, trace_text)] for ALL testcases.
+
+    One row per testcase (first failure/error text wins); skipped cases omitted —
+    a skipped+failure sibling combo (Surefire quirk) counts as skipped here even
+    though failures_from_xml reports it as a failure. Rows missing classname/name
+    are dropped.
+    Green rows carry "". The pass/fail split feeds the assertion slicer's
+    leakage-safe contrast set (greens from the agent's own run)."""
+    out = []
+    root = ET.parse(path).getroot()
+    for tc in root.iter("testcase"):
+        if tc.get("classname") is None or tc.get("name") is None:
+            continue
+        if tc.find("skipped") is not None:
+            continue
+        bad = list(tc.findall("failure")) + list(tc.findall("error"))
+        if bad:
+            out.append((tc.get("classname"), tc.get("name"), False, bad[0].text or ""))
+        else:
+            out.append((tc.get("classname"), tc.get("name"), True, ""))
+    return out
