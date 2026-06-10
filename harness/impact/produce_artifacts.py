@@ -88,14 +88,38 @@ def stage(name: str, outputs):
 
 # --- Stage stubs (bodies filled in Tasks 9–12) ---
 
-@stage("joern", outputs=lambda c: [])
+def _joern_outputs(c: Ctx) -> list[Path]:
+    home = Path.home() / ".graph-tipper"
+    from tools.get_joern import launcher_path  # GT_ROOT in sys.path on -m invocation
+    return [launcher_path(home)]
+
+
+@stage("joern", outputs=_joern_outputs)
 def s_joern(c: Ctx) -> None:
-    raise NotImplementedError("stage body lands in Task 9")
+    run([sys.executable, GT_ROOT / "tools" / "get_joern.py"], cwd=GT_ROOT)
 
 
-@stage("slice", outputs=lambda c: [])
+def _slice_outputs(c: Ctx) -> list[Path]:
+    return [c.out / "slices" / f"{c.method}.budget.md"]
+
+
+@stage("slice", outputs=_slice_outputs)
 def s_slice(c: Ctx) -> None:
-    raise NotImplementedError("stage body lands in Task 9")
+    # CLI resolves joern via --joern-home flag → ProcessJoernInvoker(joernHome);
+    # null joernHome falls back to PATH. See SliceCommand.java:31 + ProcessJoernInvoker.java:11.
+    bin_name = "graph-tipper.bat" if os.name == "nt" else "graph-tipper"
+    cli = GT_ROOT / "build" / "install" / "graph-tipper" / "bin" / bin_name
+    if not cli.exists():
+        run([gradlew_cmd(), "installDist", "-q",
+             *(["-Dorg.gradle.java.home=" + c.java_home] if c.java_home else [])], cwd=GT_ROOT)
+    workdir = c.out / "slice-work"
+    workdir.mkdir(parents=True, exist_ok=True)
+    joern_home = str(Path.home() / ".graph-tipper" / "joern-cli")
+    run([cli, "slice", "--project", c.project, "--target", c.slice_target,
+         "--out", workdir, "--joern-home", joern_home], cwd=GT_ROOT)
+    budgets = sorted(workdir.glob("*.budget.md"))
+    assert len(budgets) == 1, f"expected exactly one budget slice, got {budgets}"
+    (c.out / "slices" / f"{c.method}.budget.md").write_text(budgets[0].read_text())
 
 
 @stage("agent", outputs=lambda c: [])

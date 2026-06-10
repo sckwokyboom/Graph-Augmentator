@@ -24,3 +24,7 @@ def test_scrub_absolute_paths():
 def test_scrub_raises_on_leftover_abs():
     with pytest.raises(RuntimeError, match="absolute path"):
         pa.scrub_paths("see /Users/other/secret.txt", roots=["/Users/me/gt/"])
+
+def test_slice_outputs_named_by_method(tmp_path):
+    c = pa.Ctx(tmp_path, "a.B$C.putValue", "f#t", ["T"], tmp_path, None, False, False)
+    assert pa._slice_outputs(c) == [tmp_path / "slices" / "putValue.budget.md"]
