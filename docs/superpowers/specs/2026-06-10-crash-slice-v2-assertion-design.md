@@ -113,3 +113,12 @@ empty FILENAME → class-level fallback (`_test_classes` built from `__t__`-resi
 Post-fix boundary renders 100% production, actual-side first (getUsageMessage 26,
 Layout.toString 4, TextTable.toString 2, optionList 1); `addRowValues` present at n=4 as
 `prior-call` (the receiver-flow dangle keeps it out of actual-side, by design).
+
+**Gate re-framing (user decision, 2026-06-10):** criterion (a) is accepted as measured —
+structurally unreachable for method-level hit coverage on a saturated single-cause corpus;
+v2 ships as the honest post-hoc layer (clean boundary + ranking that self-reports
+non-discrimination), and **v2.1 ambient per-test value events get their own
+brainstorm/spec/plan** carrying this measurement as justification. **G2 is re-scoped to a
+generality measurement** on a second culprit (putValue indent-bump): applicability,
+boundary cleanliness, localization@k as a reported number (no top-3 pass/fail), ≤45 lines,
+<5 s, revert verified.
