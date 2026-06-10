@@ -25,7 +25,7 @@
 - Create: `harness/impact/cpg_index.py`
 - Test: `harness/tests/impact/test_cpg_index.py`
 
-- [ ] **Step 1: Write failing test**
+- [x] **Step 1: Write failing test**
 
 ```python
 import json
@@ -70,12 +70,12 @@ def test_statements_and_reverse_edges(tmp_path):
     assert idx.rev_rd["s1"] == ["s2"]
 ```
 
-- [ ] **Step 2: Run to verify it fails**
+- [x] **Step 2: Run to verify it fails**
 
 Run: `PYTHONPATH=. python3 -m pytest harness/tests/impact/test_cpg_index.py -q`
 Expected: ImportError (module not found).
 
-- [ ] **Step 3: Implement `cpg_index.py`**
+- [x] **Step 3: Implement `cpg_index.py`**
 
 ```python
 """Indexes over the graph-tipper CPG export (export.json) for crash-slice walks.
@@ -133,12 +133,12 @@ def load_index(export_json) -> CpgIndex:
     return CpgIndex(json.loads(Path(export_json).read_text()))
 ```
 
-- [ ] **Step 4: Run to verify it passes**
+- [x] **Step 4: Run to verify it passes**
 
 Run: `PYTHONPATH=. python3 -m pytest harness/tests/impact/test_cpg_index.py -q`
 Expected: 2 passed.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add harness/impact/cpg_index.py harness/tests/impact/test_cpg_index.py
@@ -153,7 +153,7 @@ git commit -m "feat(impact): cpg_index — export.json indexes for crash-slice w
 - Create: `harness/impact/stack_parse.py`
 - Test: `harness/tests/impact/test_stack_parse.py`
 
-- [ ] **Step 1: Write failing test**
+- [x] **Step 1: Write failing test**
 
 ```python
 from harness.impact.stack_parse import parse_trace, pick_root_cause, failures_from_xml
@@ -199,12 +199,12 @@ def test_failures_from_xml(tmp_path):
     assert "at picocli.X.y" in fails[0][1]
 ```
 
-- [ ] **Step 2: Run to verify it fails**
+- [x] **Step 2: Run to verify it fails**
 
 Run: `PYTHONPATH=. python3 -m pytest harness/tests/impact/test_stack_parse.py -q`
 Expected: ImportError.
 
-- [ ] **Step 3: Implement `stack_parse.py`**
+- [x] **Step 3: Implement `stack_parse.py`**
 
 ```python
 """Parse Java stack traces (raw text or gradle test-result XML) into cause chains.
@@ -275,12 +275,12 @@ def failures_from_xml(path):
     return out
 ```
 
-- [ ] **Step 4: Run to verify it passes**
+- [x] **Step 4: Run to verify it passes**
 
 Run: `PYTHONPATH=. python3 -m pytest harness/tests/impact/test_stack_parse.py -q`
 Expected: 3 passed.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add harness/impact/stack_parse.py harness/tests/impact/test_stack_parse.py
@@ -297,7 +297,7 @@ git commit -m "feat(impact): stack_parse — cause chains + root-cause selection
 
 The synthetic fixture mirrors the real gate scenario: caller `addRowValues`-like method intact in the CPG (call seed + guard + def), deepest `putValue`-like method present in the CPG **but stale** (stub CODE differs from the disk source) → the consistency check must demote it to FALLBACK and quote the disk line.
 
-- [ ] **Step 1: Write failing test**
+- [x] **Step 1: Write failing test**
 
 ```python
 import json
@@ -393,12 +393,12 @@ def test_assertion_case_detected(tmp_path):
         build_slice(cause, idx, "p.")
 ```
 
-- [ ] **Step 2: Run to verify it fails**
+- [x] **Step 2: Run to verify it fails**
 
 Run: `PYTHONPATH=. python3 -m pytest harness/tests/impact/test_crash_slice.py -q`
 Expected: ImportError.
 
-- [ ] **Step 3: Implement `crash_slice.py` (core + render; CLI added in Task 4)**
+- [x] **Step 3: Implement `crash_slice.py` (core + render; CLI added in Task 4)**
 
 ```python
 """Crash-slice: stack-seeded static dependency corridor for an exception failure.
@@ -574,12 +574,12 @@ def render(cause, frame_slices, max_lines=45):
     return "\n".join(out) + "\n"
 ```
 
-- [ ] **Step 4: Run to verify it passes**
+- [x] **Step 4: Run to verify it passes**
 
 Run: `PYTHONPATH=. python3 -m pytest harness/tests/impact/test_crash_slice.py -q`
 Expected: 3 passed.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add harness/impact/crash_slice.py harness/tests/impact/test_crash_slice.py
@@ -594,7 +594,7 @@ git commit -m "feat(impact): crash_slice core — seeds, corridor walk, stalenes
 - Modify: `harness/impact/crash_slice.py` (append `main`)
 - Test: `harness/tests/impact/test_crash_slice.py` (append one CLI test)
 
-- [ ] **Step 1: Append failing CLI test**
+- [x] **Step 1: Append failing CLI test**
 
 ```python
 def test_cli_on_xml_dir_writes_slice_and_applicability(tmp_path, capsys, monkeypatch):
@@ -618,12 +618,12 @@ def test_cli_on_xml_dir_writes_slice_and_applicability(tmp_path, capsys, monkeyp
     assert "gt-crash-probe" in out.read_text()
 ```
 
-- [ ] **Step 2: Run to verify it fails**
+- [x] **Step 2: Run to verify it fails**
 
 Run: `PYTHONPATH=. python3 -m pytest harness/tests/impact/test_crash_slice.py::test_cli_on_xml_dir_writes_slice_and_applicability -q`
 Expected: ImportError (no `main`).
 
-- [ ] **Step 3: Append `main` to `crash_slice.py`**
+- [x] **Step 3: Append `main` to `crash_slice.py`**
 
 ```python
 def main():
@@ -673,12 +673,12 @@ if __name__ == "__main__":
     main()
 ```
 
-- [ ] **Step 4: Run full suite**
+- [x] **Step 4: Run full suite**
 
 Run: `PYTHONPATH=. python3 -m pytest harness/tests/impact/ -q`
 Expected: 49 passed (40 prior + 2 + 3 + 4 new).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add harness/impact/crash_slice.py harness/tests/impact/test_crash_slice.py
@@ -691,7 +691,7 @@ git commit -m "feat(impact): crash_slice CLI — XML/dir input + applicability a
 
 **Files:** none (validation; revert picocli when done).
 
-- [ ] **Step 1: Inject the probe throw into the real putValue**
+- [x] **Step 1: Inject the probe throw into the real putValue**
 
 ```bash
 python3 - <<'PY'
@@ -705,7 +705,7 @@ print("injected")
 PY
 ```
 
-- [ ] **Step 2: Run the failing tests, confirm red XML exists**
+- [x] **Step 2: Run the failing tests, confirm red XML exists**
 
 ```bash
 cd ~/gt-eval/picocli && ./gradlew :test --tests 'picocli.TextTableTest' --rerun-tasks --console=plain ; cd -
@@ -713,7 +713,7 @@ ls ~/gt-eval/picocli/build/test-results/test/TEST-picocli.TextTableTest.xml
 ```
 Expected: BUILD FAILED (tests red), XML present.
 
-- [ ] **Step 3: Build the crash slice against the CACHED export**
+- [x] **Step 3: Build the crash slice against the CACHED export**
 
 ```bash
 cd /Users/sckwoky/Projects/Graph-Tipper
@@ -725,7 +725,7 @@ PYTHONPATH=. python3 -m harness.impact.crash_slice \
 cat /tmp/crash-putvalue.md; wc -l /tmp/crash-putvalue.md
 ```
 
-- [ ] **Step 4: Check the spec's gate criteria (a)–(f)**
+- [x] **Step 4: Check the spec's gate criteria (a)–(f)**
 
 - (a) header contains `IllegalStateException: gt-crash-probe`;
 - (b) deepest frame = the injected line, tagged `[FALLBACK]` (stale stub demoted by the consistency check), `src:` quote contains `gt-crash-probe`;
@@ -733,7 +733,7 @@ cat /tmp/crash-putvalue.md; wc -l /tmp/crash-putvalue.md
 - (d) `mode: MIXED`; (e) ≤45 lines; (f) wall-clock <10 s.
 If any fail: diagnose by measurement (print the frame resolution + statements at the frame line) before touching code.
 
-- [ ] **Step 5: Revert picocli and record the result**
+- [x] **Step 5: Revert picocli and record the result**
 
 ```bash
 sed -i '' '/gt-crash-probe/d' ~/gt-eval/picocli/src/main/java/picocli/CommandLine.java
