@@ -61,6 +61,13 @@ def test_agent_manifest_content():
 
 def test_cap_init_single_fork():
     assert "maxParallelForks = 1" in pa.CAP_INIT
+    assert "forkEvery = 0" in pa.CAP_INIT
+
+
+def test_cap_init_passes_includes_and_collects_universe():
+    assert ",includes=" in pa.CAP_INIT
+    assert "GTCAP_INCLUDES" in pa.CAP_INIT
+    assert "executed_tests.txt" in pa.CAP_INIT
 
 
 def test_gen_outputs_names(tmp_path):

@@ -195,11 +195,21 @@ CAP_INIT = """\
 def out = System.getenv('GTCAP_OUT')
 def agentJar = System.getenv('GTCAP_AGENT')
 def capture = System.getenv('GTCAP_CAPTURE')
+def includes = System.getenv('GTCAP_INCLUDES')
 gradle.allprojects { p ->
   p.tasks.withType(Test).configureEach { t ->
     t.maxParallelForks = 1
     t.forkEvery = 0
-    t.jvmArgs(["-javaagent:" + agentJar + "=out=" + out + ",capture=" + capture])
+    t.jvmArgs(["-javaagent:" + agentJar + "=out=" + out + ",capture=" + capture + ",includes=" + includes])
+    def executed = java.util.Collections.synchronizedSet(new java.util.LinkedHashSet())
+    t.afterTest { desc, result ->
+      executed.add((desc.className + "." + desc.name).replaceAll(/[\\[(].*/, ""))
+    }
+    t.afterSuite { desc, result ->
+      if (desc.getParent() == null) {
+        new File(out, "executed_tests.txt").text = executed.join("\\n")
+      }
+    }
   }
 }
 """
@@ -219,7 +229,8 @@ def s_capture(c: Ctx) -> None:
     init.write_text(CAP_INIT, encoding="utf-8")
     env = {"GTCAP_OUT": str(cap),
            "GTCAP_AGENT": str(AGENT_DIR / "gtcov-agent.jar"),
-           "GTCAP_CAPTURE": c.target_fqn}
+           "GTCAP_CAPTURE": c.target_fqn,
+           "GTCAP_INCLUDES": c.target_fqn.rsplit(".", 1)[0]}
     run([gradlew_cmd(), ":test",
          *[f"--tests={t}" for t in c.tests],
          "--rerun-tasks", "--init-script", init, "--console=plain",
