@@ -194,14 +194,59 @@ def s_agent(c: Ctx) -> None:
          build / "MANIFEST.MF", "-C", agent, "."], cwd=AGENT_DIR)
 
 
-@stage("capture", outputs=lambda c: [])
+CAP_INIT = """\
+def out = System.getenv('GTCAP_OUT')
+def agentJar = System.getenv('GTCAP_AGENT')
+def capture = System.getenv('GTCAP_CAPTURE')
+gradle.allprojects { p ->
+  p.tasks.withType(Test).configureEach { t ->
+    t.maxParallelForks = 1
+    t.forkEvery = 0
+    t.jvmArgs(["-javaagent:" + agentJar + "=out=" + out + ",capture=" + capture])
+  }
+}
+"""
+
+
+def _capture_outputs(c: Ctx) -> list[Path]:
+    return [c.out / "capture" / "done.marker"]
+
+
+@stage("capture", outputs=_capture_outputs)
 def s_capture(c: Ctx) -> None:
-    raise NotImplementedError("stage body lands in Task 11")
+    cap = c.out / "capture"
+    cap.mkdir(parents=True, exist_ok=True)
+    for old in cap.glob("values*.tsv"):
+        old.unlink()
+    init = Path(tempfile.gettempdir()) / "gtcap-init.gradle"
+    init.write_text(CAP_INIT, encoding="utf-8")
+    env = {"GTCAP_OUT": str(cap),
+           "GTCAP_AGENT": str(AGENT_DIR / "gtcov-agent.jar"),
+           "GTCAP_CAPTURE": c.target_fqn}
+    run([gradlew_cmd(), ":test",
+         *[f"--tests={t}" for t in c.tests],
+         "--rerun-tasks", "--init-script", init, "--console=plain",
+         *(["-Dorg.gradle.java.home=" + c.java_home] if c.java_home else [])],
+        cwd=c.project, env=env)
+    values = sorted(cap.glob("values*.tsv"))
+    assert values and any(p.stat().st_size > 0 for p in values), "capture produced no values"
+    (cap / "done.marker").write_text("\n".join(p.name for p in values), encoding="utf-8")
 
 
-@stage("gen", outputs=lambda c: [])
+def _gen_outputs(c: Ctx) -> list[Path]:
+    s = c.out / "slices"
+    return [s / f"{c.method}-graph-slice.md", s / f"{c.method}-graph-slice-verbose.md"]
+
+
+@stage("gen", outputs=_gen_outputs)
 def s_gen(c: Ctx) -> None:
-    raise NotImplementedError("stage body lands in Task 11")
+    from harness.impact.gen_artifact import build
+    budget = c.out / "slices" / f"{c.method}.budget.md"
+    roots = [str(c.project) + os.sep, str(c.project).replace("\\", "/") + "/"]
+    compact = scrub_paths(build(budget, c.out / "capture", c.target_fqn), roots)
+    verbose = scrub_paths(budget.read_text(encoding="utf-8"), roots)
+    (c.out / "slices" / f"{c.method}-graph-slice.md").write_text(compact, encoding="utf-8")
+    (c.out / "slices" / f"{c.method}-graph-slice-verbose.md").write_text(verbose, encoding="utf-8")
 
 
 @stage("impact-data", outputs=lambda c: [])

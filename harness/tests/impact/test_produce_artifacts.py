@@ -50,3 +50,13 @@ def test_bytebuddy_locator_prefers_pinned(tmp_path, monkeypatch):
 def test_agent_manifest_content():
     assert "Premain-Class: gtcov.Agent" in pa.AGENT_MANIFEST
     assert "Can-Retransform-Classes: true" in pa.AGENT_MANIFEST
+
+
+def test_cap_init_single_fork():
+    assert "maxParallelForks = 1" in pa.CAP_INIT
+
+
+def test_gen_outputs_names(tmp_path):
+    c = pa.Ctx(tmp_path, "a.B$C.putValue", "f#t", ["T"], tmp_path, None, False, False)
+    s = tmp_path / "slices"
+    assert pa._gen_outputs(c) == [s / "putValue-graph-slice.md", s / "putValue-graph-slice-verbose.md"]
