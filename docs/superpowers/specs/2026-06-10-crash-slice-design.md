@@ -1,70 +1,88 @@
-# Crash-slice: trace-guided slicing for red tests — Design
+# Crash-slice: stack-seeded static dependency corridor for red tests — Design
 
-**Date:** 2026-06-10
+**Date:** 2026-06-10 (rev. 2 after external review)
 
-**Goal:** When a test fails with an exception, produce a compact **crash-slice** artifact: the failure's stack spine annotated with the *why-corridor* — guard conditions (CDG) and data definitions (REACHING_DEF) along the executed path only — so an agent (or human) gets "where AND why" with `file:line` anchors instead of grepping a 17k-line file.
+**Goal:** For **exception** test failures, produce a compact crash-slice artifact: the **runtime stack spine** from the failing test, annotated with a **stack-seeded static dependency corridor** — *possible controlling guards* (CDG) and *resolvable reaching definitions* (REACHING_DEF) for each stack-frame line, plus the exception message (the one runtime value we get for free). The artifact is **not a full dynamic slice** and not "the executed path" — it is a low-cost, leakage-safe debugging aid that cuts the agent's grep/read exploration after its own red test.
 
-**Why this beats alternatives:** full symbolic execution inherits the path explosion we already measured statically (`BRANCH_EXPLOSION` in arg-slices); full dynamic slicers (Slicer4J lineage) need instruction-level tracing. Here the **execution already chose the path** (the stack), so static analysis only fills a one-dimensional corridor. Cost: a JSON graph walk.
+**Position in the agent cycle** (this layer does NOT replace test selection — TIA and the generation artifact are already shipped in this repo):
+```
+diff → affected tests (TIA, shipped) → red test → crash-slice → next edit
+```
 
-**Leakage property (decisive):** the slice is built from the *agent's own failing run* + the static graph of the current code. No original/baseline behavior involved → legitimate in the masked benchmark (agent debugging its own attempt) AND in production (bugfix on a live repo). This survives the oracle-leakage critique that killed the adaptive behavioral-diff idea.
+**Why this beats alternatives:** full symbolic execution inherits the path explosion we measured statically (`BRANCH_EXPLOSION`); full dynamic slicing needs instruction-level tracing. Here the stack pins the inter-procedural path, so static analysis fills a one-dimensional corridor. Cost in v1: a JSON graph walk against a **pre-built** export (see CPG freshness model — no re-export per test).
 
-## Verified foundations (measured 2026-06-10, not assumed)
+**Leakage property (decisive):** built from the agent's *own failing run* + the static graph. No original/baseline behavior → legitimate in the masked benchmark and in production bugfix. (This survives the oracle-leakage critique that disqualified adaptive behavioral-diff.)
+
+## Verified foundations (measured 2026-06-10)
 
 On the cached picocli export (`~/gt-eval/slice/.cache/<sha>/export/export.json`, 192k vertices / 441k edges, 75 MB, loads in seconds):
 
-- Every statement-level vertex (`CALL`, `LITERAL`, `CONTROL_STRUCTURE`, `RETURN`) carries **`PARENT_METHOD_ID`**, `LINE_NUMBER`, `CODE` → direct containment + rendering, no AST walk. `METHOD` vertices carry `FULL_NAME`, `FILENAME`, line range, `IS_TEST`.
-- **CDG edges: 28,466, zero dangling** (CALL/LITERAL→CALL/LITERAL). Proven guard extraction: `throw new IllegalArgumentException(...)` in `addRowValues` ←CDG→ `values.length > columns.length`.
-- **REACHING_DEF: 263,974 edges; 45% resolve** to exported vertices (116,547 →CALL, 2,281 →RETURN); 55% dangle into unexported IDENTIFIERs (export filter, by design). Proven def chain: `Cell cell = putValue(row, col, values[col])` ← `this.putValue(...)` ← `values[col]`; guard `col < values.length`.
-- **Known gap:** identifier-mediated flows (e.g. `row` ← `int row = rowCount() - 1`) partially lost. v1 ships with guards + resolvable defs; enrichment (re-export emitting REACHING_DEF out of identifiers/parameters) is a later producer change — `joern` is installed (`/opt/homebrew/bin/joern`) and the export script (`prepare-and-export.sc`) + `cpg.bin` workspace are cached, so re-export is mechanical.
-- **Caveat discovered:** the cached CPG has `putValue` *stubbed* (it was exported during the masked-eval session). Consequence embraced in the design: frames whose method body is missing/stale in the CPG fall back to "show the source line from the file" — which is exactly the planned treatment for *agent-edited* frames.
+- Every statement-level vertex (`CALL`, `LITERAL`, `CONTROL_STRUCTURE`, `RETURN`) carries **`PARENT_METHOD_ID`**, `LINE_NUMBER`, `CODE`; `METHOD` carries `FULL_NAME`, `FILENAME`, line range, `IS_TEST` → direct containment + rendering, no AST walk.
+- **CDG: 28,466 edges, zero dangling.** Proven: `throw new IllegalArgumentException(...)` in `addRowValues` ←CDG→ `values.length > columns.length`.
+- **REACHING_DEF: 263,974 edges; 45% resolve** (116,547 →CALL, 2,281 →RETURN); 55% dangle into unexported IDENTIFIERs. Proven: `Cell cell = putValue(row, col, values[col])` ← `values[col]`; guard `col < values.length`. **Identifier-mediated defs (e.g. `row ← rowCount()-1`) are partially lost — the renderer must say so** (fixed disclaimer line).
+- `joern` installed; export script + `cpg.bin` workspace cached → enrichment re-export is mechanical (v2).
+- Cached CPG has `putValue` stubbed (masked-eval session) → exercises the fallback path by construction.
+
+## CPG freshness model (explicit contract)
+
+- **v1: the CPG is baseline / stale-tolerant.** No Joern re-export per failed test or per edit. Frames whose method is missing, stubbed, or whose line falls outside the CPG method range → **source-line fallback** (quote the line from the file on disk).
+- This is also the *agent-edited frame* treatment: the agent knows the body it just wrote; the corridor's value concentrates in the unedited surroundings, which the cached CPG covers.
+- v2 (optional): incremental re-export after compile.
 
 ## v1 scope
 
-**In:** exception-case crash-slice. Input = a Java stack trace (raw text or gradle `build/test-results/test/*.xml`). Output = markdown.
-**Out (v2+):** assertion-failure case (the culprit frame has already returned; needs per-test boundary value events from ValueRecorder — designed, not built); heap/field flow completeness; multithreading; lambdas/synthetic frames (skipped, kept as raw lines); OpenCode `crash_slice` tool + Agentic-Bench condition; identifier-flow re-export.
+**In:** exception failures. Input = raw stack trace text or gradle `build/test-results/test/*.xml`. Output = markdown.
+**Out (v2+):** assertion-failure case (culprit frame already returned; needs per-test boundary value events — designed, not built); coverage-pruning of the corridor to actually-covered lines (would justify "executed-only" claims; needs line-level per-test coverage we don't produce yet); heap/field flows; multithreading; OpenCode `crash_slice` tool + Agentic-Bench condition; identifier-flow enrichment re-export.
+
+**Root-cause selection (stack_parse contract):** gradle/JUnit traces wrap causes (`Caused by:`, `InvocationTargetException`, assertion wrappers). Parse the full chain; pick the **deepest `Caused by` whose trace contains a project *production* frame**; slice that. If the chosen trace's deepest project frame is a test method (assertion case) → exit with an explicit "assertion failures are v2" message, count toward applicability metric as inapplicable.
+
+**Seed selection (per frame, on the frame's line):**
+1. Prefer the `CALL` vertex whose `METHOD_FULL_NAME` matches the next-deeper stack frame's method (the actual call edge taken).
+2. Deepest frame: prefer the exception-constructor `CALL` / `throw` statement.
+3. Multiple seeds on the line → render all, cap 3.
+4. No vertex on the line (stale/edited/stubbed) → source-line fallback.
+
+**Per-frame confidence tag, rendered in the markdown:**
+- `FULL` — method in CPG, seeds found, corridor available.
+- `FALLBACK` — source line only (no corridor): missing/stubbed/edited method or no seed.
+- The artifact header states the overall mode (`FULL` / `MIXED` / `FALLBACK`).
 
 ## Architecture
 
 ```
 failing test
-  └─ gradle XML / raw stacktrace ──▶ stack_parse.py ──▶ frames [(class, method, file, line)]
-                                                          (filtered to project package)
-export.json ──▶ cpg_index (vid, by-parent-method, rev-CDG, rev-RD, METHOD by FQN)
+  └─ gradle XML / raw trace ─▶ stack_parse.py ─▶ cause chain → root cause → frames
+                                                  [(class, method, file, line)], package-filtered
+export.json ─▶ cpg_index.py (vid, by-parent-method, rev-CDG, rev-RD, METHOD by FQN)
                                   │
-                       crash_slice.py: for each of the deepest K project frames:
-                         seed   = statement vertices at the frame's line
-                         guards = ←CDG from seed, depth ≤ 2 (transitive conditions)
-                         defs   = ←REACHING_DEF from seed, depth ≤ 2, resolvable only
-                         fallback: method missing/stubbed in CPG → quote source line
-                                  │
-                                  ▼
-              crash-slice.md: per frame `file:line` + seed/guard/def statements (CODE),
-              deepest-first, caps: ≤ K=6 frames, ≤ 8 statements/frame, ≤ ~40 lines total
+                  crash_slice.py: deepest K=6 project frames →
+                    seed (rules above) → guards ←CDG ≤2 hops → defs ←RD ≤2 hops (resolvable)
+                    → markdown: exception type+message first, then per frame:
+                      file:line [confidence] seed / guards / defs statements (CODE)
+                    fixed footer: "Data-flow incomplete: identifier-level defs
+                    are unavailable in this CPG export."
+              caps: ≤6 frames, ≤8 statements/frame, ≤45 lines total
 ```
 
-Components (all stdlib Python, same conventions as `harness/impact/`):
-- `harness/impact/cpg_index.py` — load export.json → the four indexes. Pure, reusable (future: render_generation/model can share it).
-- `harness/impact/stack_parse.py` — gradle test-XML or raw trace → ordered frames; package filter; JUnit/gradle frames dropped.
-- `harness/impact/crash_slice.py` — walk + markdown renderer + CLI:
-  `python3 -m harness.impact.crash_slice --export <export.json> --trace <file|XML dir> --package picocli. --out crash.md [--frames 6]`
-
-Frame treatment detail: the stack gives the exact call-site line in *every* caller frame, so each frame's seed is precise (no heuristics). The deepest frame's seed is the throw site itself. Caller seeds are call-sites: their arg defs and loop/branch guards are the corridor.
+CLI: `python3 -m harness.impact.crash_slice --export <export.json> --trace <file|XML dir> --package picocli. --out crash.md [--frames 6]`
 
 ## Validation gate (measured, no LLM)
 
-1. Inject `if (true) throw new IllegalStateException("gt-crash-probe");` at the head of the real `putValue` in `~/gt-eval/picocli` (the F_dynamic experiment shape — 406 tests fail with deep spines through `addRowValues`).
-2. Run one failing deep test (e.g. via `usage()` path), collect its stack trace from gradle XML.
-3. Build the crash-slice against the **cached** export (putValue stubbed there → exercises the fallback on the deepest frame; `addRowValues` and above are intact → full CPG treatment).
-4. **Pass criteria:** slice contains (a) the injected throw line via source-fallback; (b) the `addRowValues` call-site `putValue(row, col, values[col])` with guard `col < values.length` and def `values[col]`; (c) ≤ 45 rendered lines; (d) end-to-end < 10 s (index load dominates).
+1. Inject `if (true) throw new IllegalStateException("gt-crash-probe");` at the head of the real `putValue` in `~/gt-eval/picocli`.
+2. Run one failing deep test (usage()-path), take its gradle XML.
+3. Build the slice against the **cached** export (putValue stubbed there → deepest frame must come out `FALLBACK`; `addRowValues`+above `FULL`).
+4. **Pass criteria:** (a) header shows `IllegalStateException: gt-crash-probe`; (b) deepest frame = injected throw line via fallback, tagged `FALLBACK`; (c) `addRowValues` frame shows call-site `putValue(row, col, values[col])` with guard `col < values.length` and def `values[col]`, tagged `FULL`; (d) overall mode `MIXED`; (e) ≤45 rendered lines; (f) end-to-end <10 s.
 5. Revert picocli.
+
+**Applicability metric (logged whenever the tool runs over a result set):**
+`applicability_rate = exception failures with deepest project frame in production code / all red tests`. v1's value is bounded by this rate; evaluate v1 on the exception subset only, report the rate honestly alongside.
 
 ## Non-goals / honesty
 
-- This is **observability, not an oracle**: the slice explains *what executed and what fed it*, it does not say what *should* happen (tests/spec do).
-- Usefulness-to-agent (fewer exploration steps / cycles) is a **hypothesis**; the measured gate above only proves the slice surfaces the culprit corridor. The agent A/B (OpenCode tool + Agentic-Bench condition) is v2, after the same oracle/integration questions as the rest of the bench work.
-- Assertion failures (most common in practice) are v2 — be explicit in the CLI error message when the trace's deepest project frame is a test method (assertion case) rather than thrown-from-production code.
+- Observability, not an oracle: the corridor says *what is statically wired to the failing line*, with the stack guaranteeing only the inter-procedural spine — guards/defs near a seed may include not-executed statements (no line-coverage filter in v1).
+- Usefulness-to-agent (fewer exploration steps, faster next edit, cycles-to-green on exception subset) is a **hypothesis** for the v2 agent A/B; the gate only proves the culprit corridor surfaces.
 
 ## Self-review
-- Placeholders: none — components, CLI, caps, gate criteria are concrete; v2 items are explicitly out of scope, not deferred TODOs.
-- Consistency: fallback-for-stubbed-frames doubles as the agent-edited-frame treatment (one mechanism); the gate exercises both CPG-backed and fallback paths.
-- Scope: one plan's worth (3 modules + gate). Ambiguity: "deepest K project frames" — K=6 default, CLI-tunable; assertion-case detection = deepest project frame `IS_TEST` or in test sources → explicit "v2" message.
+- Placeholders: none; v2 items are scoped out explicitly, not TODOs.
+- Consistency: fallback ≡ edited-frame treatment (one mechanism, gate exercises both); claims align with the rename (corridor ≠ executed path; "possible" guards).
+- Ambiguity: K=6 default CLI-tunable; root-cause + seed rules fully specified; assertion case → explicit v2 message + applicability accounting.
