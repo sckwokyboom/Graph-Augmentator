@@ -11,6 +11,7 @@ import io
 import os
 import stat
 import sys
+import urllib.error
 import urllib.request
 import zipfile
 from pathlib import Path
@@ -38,8 +39,18 @@ def install(home: Path, version: str) -> Path:
     home.mkdir(parents=True, exist_ok=True)
     url = download_url(version)
     print(f"[get_joern] downloading {url}", file=sys.stderr)
-    with urllib.request.urlopen(url) as resp:
-        data = resp.read()
+    try:
+        with urllib.request.urlopen(url) as resp:
+            data = resp.read()
+    except urllib.error.URLError as e:
+        if "CERTIFICATE_VERIFY_FAILED" in str(e):
+            sys.exit(
+                "[get_joern] TLS certificate verification failed.\n"
+                "  python.org builds on macOS ship without root certs. Either run\n"
+                "  'Install Certificates.command' from the Python app folder, or set\n"
+                "  SSL_CERT_FILE to a CA bundle, e.g.:\n"
+                "    export SSL_CERT_FILE=$(python3 -c 'import certifi; print(certifi.where())')")
+        raise
     with zipfile.ZipFile(io.BytesIO(data)) as zf:
         zf.extractall(home)
     if os.name != "nt":  # zipfile drops the exec bit
