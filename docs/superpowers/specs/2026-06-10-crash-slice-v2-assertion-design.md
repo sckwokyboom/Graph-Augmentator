@@ -1,0 +1,92 @@
+# Crash-slice v2: assertion-failure localization — Design
+
+**Date:** 2026-06-10
+
+**Goal:** For **assertion** test failures (`ComparisonFailure` & friends — the stack's deepest project frame is *test* code, no production frame at all), produce a compact localization artifact: the failing set's **test→production boundary**, **coverage×reachability-ranked culprit candidates**, and an exemplar test-side dependency corridor. v1 measured the need: throw-injection corpus 2/2 applicable, cellswap corpus **0/118** — the volume of real red tests lives here.
+
+**Position in the agent cycle** (unchanged):
+```
+diff → affected tests (TIA, shipped) → red tests → crash-slice (v1 exception | v2 assertion) → next edit
+```
+
+**Contract decision (economics, decided with user 2026-06-10):** the tool stays **post-hoc** — it runs nothing. Budget rationale: an agent cycle on picocli costs minutes; post-hoc costs ~1–2 s; a tool-triggered instrumented re-run costs +30–120 s plus gradle/SecurityManager fragility and can eat the impact the tool exists to create. Expensive dynamic work belongs in the two places that add **zero runs to the agent loop**: artifact-build time (`build_all`, once per SHA) and — if ever measured necessary — *ambient* instrumentation of runs the agent performs anyway. Dynamic value capture (per-test boundary value events) is **v2.1, gated on a measured hole** in this design (see "flat ranking" marker below).
+
+## Verified foundations (measured 2026-06-10 on the cached picocli export + corpus)
+
+- **Test code is in the CPG:** 2,568 `IS_TEST=true` methods; test methods carry statement children with `CODE`, `LINE_NUMBER`, and CDG/REACHING_DEF edges — the v1 corridor machinery works inside tests unchanged. Caveat: test `FILENAME` is rewritten to `src/__t__/java/...` → map `__t__` → `test` for on-disk reads.
+- **The static corridor has grip, with a measured limit:** for `TextTableTest.addRowValues_nulls` (one of the 118), REACHING_DEF from the assertion statement at L53 yields `this.normalizeNewlines(textTable)` (the actual-side expression) + the expected `LITERAL` — but hop-2 does **not** reach the mutating calls `textTable.addRowValues(...)`: receiver/identifier-mediated flow dangles at statement level (the same 55% dangle v1 documented). The boundary is still recovered statically with zero runs — by the **method-scan fallback** (all production CALLs of the test method), which for this test yields exactly the two `addRowValues` calls. Corridor names the actual-side expression; method-scan names the boundary; both are cheap.
+- **Assertion trace shape:** the only project frame is the test method itself (`picocli.TextTableTest.addRowValues_nulls(TextTableTest.java:53)`); above it only `org.junit.Assert.*`. Expected/actual excerpts ride in the `ComparisonFailure` message (JUnit-truncated with `...`).
+- **Cached per-test coverage exists** at `<project>/.impact/coverage.json` as `methodFqn → [testFqn]`; current universe = **17 methods, all `picocli.CommandLine$Help$TextTable.*`** (the `build_all` includes at artifact build time). Breadth is a deployment parameter of `build_all`, not of this tool; the artifact must disclose the universe it ranked over.
+- **Corpora:** M3 cellswap — kill list 269, **118 red XMLs already on disk** (116 `HelpTest` + 2 `TextTableTest`, all `ComparisonFailure`); M4 indent0 — kill list 283, XMLs need one recreation run; M1/M2 kill lists are empty → unusable as corpora.
+- **The HelpTest 116 prove why ranking is needed:** their assertion's boundary call is `usage(...)`; the culprit (`TextTable.addRowValues`) sits several static call levels below — boundary alone does not localize.
+
+## v2 scope
+
+**In:** assertion failures, aggregated **as a set** (cross-test agreement is itself the localization signal — 118 failures of one cause must yield one artifact, not 118 slices). Input/output and CLI form unchanged from v1 (XML dir / file / raw trace → markdown).
+**Out (v2.1+ / elsewhere):** per-test boundary **value** events (ambient instrumentation; build only if this design's gate or the flat-ranking marker shows the hole); line-level coverage pruning; identifier-flow re-export; widening the coverage universe (a `build_all` decision, measured separately); **diff-prior ranking — rejected**: "failing tests ∩ my edited methods" is exactly the shipped impact tool's join; the agent composes the two tools, we don't duplicate it (and on mutation gates a diff-prior degenerates the task to top-1-always, measuring nothing).
+
+## Dispatch (entry contract; v1 behavior preserved)
+
+Per failure text → `parse_trace` → `pick_root_cause(package)`:
+1. Root cause has a production project frame → **v1 exception path, unchanged**.
+2. Otherwise, if the deepest project frame across causes is a test method (`IS_TEST` or — when not in CPG — class matches the XML `classname`) → collect into the **assertion set**.
+3. No project frame anywhere → not applicable.
+
+Artifact composition: exception slice (first applicable, v1 rules) takes priority; the assertion section gets the remaining line budget (min 15 lines); pure-assertion runs get the full budget. Applicability accounting becomes three-way: `exception-sliced / assertion-sliced / not-applicable` — assertion failures now COUNT as applicable.
+
+## Assertion slicer (new module `harness/impact/assertion_slice.py`, stdlib)
+
+**Per-failure corridor (also feeds exemplars):**
+1. Assertion frame = deepest project frame (test `cls.method`, line L). Resolve test METHOD in CPG; statements at L → seed = `assert*`/`fail*`-named CALLs preferred, else all statements at L, cap 3.
+2. REACHING_DEF walk ≤2 hops inside the test method from the seed → actual-side statements; `LITERAL` vertices (expected side) filtered out of boundary extraction but the expected literal may render in the exemplar.
+3. **Boundary** = CALLs whose `METHOD_FULL_NAME` name-part resolves under `package` to a method with `IS_TEST=false`, collected from **corridor statements ∪ all test-method statements** (the union is the rule, not corridor-then-maybe-fallback: the measured dangle means the corridor alone usually misses receiver-mutation calls). Order: corridor-derived first, then by line proximity to the assertion. Keep call-site CODE + line + resolved FQN; dedupe across failures with a count of supporting tests.
+4. Test method missing from CPG (new/edited test) → source-line fallback (v1 pattern + `__t__` mapping); such a failure still joins the matrix ranking via its test id, so it stays applicable when a matrix exists; with no matrix and no CPG test method it counts not-applicable.
+
+**Cross-set ranking (matrix mode — the main path):**
+- `F` = failing test FQNs from the XML set (strip JUnit `[param]` suffixes for matrix joins; display full ids). `P` = passing testcases **from the same XMLs** (present, no `<failure>/<error>` child) — contrast stays leakage-safe: everything comes from the agent's own run.
+- For each matrix method `m`: `ef = |F ∩ cov(m)|`, `ep = |P ∩ cov(m)|`, **Ochiai** `= ef / sqrt(|F|·(ef+ep))`; rank descending.
+- **Reachability filter:** forward call map from the CPG (per-method child CALLs → name-part FQNs under package, `<operator>.*` excluded; lazy-built in `cpg_index.py`), BFS ≤3 hops from the boundary set. Candidates not reached are **demoted below reachable ones and tagged** `not statically reachable from the test boundary (possible indirect/virtual dispatch)` — demote, don't drop: Joern's static call resolution misses virtual dispatch.
+- Top-K=3 candidates rendered, each with: Ochiai score + `ef`, the BFS call-path sketch (`usage → Help.layout → TextTable.addRowValues`, ≤5 names), and 2–3 *value-shaping* statements from the candidate body (RETURN statements; CALLs targeting other candidates/boundary methods; else first statements) + ≤2 CDG guards at 1 hop.
+- **Flat-ranking marker:** if top scores are within ε=0.05, the artifact says `coverage does not discriminate the top candidates` — this line is the explicit, measured trigger for v2.1 ambient value capture.
+
+**No-matrix fallback (degraded, never a refusal):** candidates = boundary methods + their direct callees (1 hop), ranked by how many failing tests' corridors contain the boundary call; header discloses `no coverage matrix — boundary-level localization only`.
+
+## Render (≤45 lines total, v1 cap discipline)
+
+```
+# Crash slice — 118 assertion failures (ComparisonFailure)
+_mode: ASSERTION · coverage universe: 17 methods (TextTable.*, cached artifact — may lag
+the working tree) · static corridor: possible, not proven executed_
+
+## Failure shape      ← expected/actual of the first failure, clipped ~80 chars each;
+                        failing-test count per test class
+## Boundary           ← deduped production entry calls: code @ file:line (N tests)
+## Ranked candidates  ← top-3: FQN — Ochiai, ef/|F|; call path; value-shaping lines;
+                        demotion/flat-ranking tags when applicable
+## Exemplar corridor  ← one test-side exemplar: assertion seed, actual-side defs,
+                        boundary calls (corridor- or method-scan-derived, labeled)
+_footer: identifier-flow disclaimer (v1) + method-level/cached-coverage disclaimer_
+```
+
+CLI: unchanged entry `python3 -m harness.impact.crash_slice ... [--coverage <coverage.json>] [--top 3]`; `--coverage` defaults to `<project>/.impact/coverage.json` when present. OpenCode tool `crash_slice.ts` passes its existing `coverage` config key through. stdout applicability line: `applicability: E exception-sliced, A assertion-sliced, N not-applicable of T red tests`.
+
+## Validation gate (measured, no LLM)
+
+**G1 — M3 cellswap (zero test runs: artifacts already on disk):** run the CLI over the 118 red XMLs + cached matrix + cached export. Pass: (a) `TextTable.addRowValues` (the mutated method) in top-3 candidates; (b) artifact ≤45 lines; (c) <5 s wall-clock for the whole set; (d) applicability `0 exception, 118 assertion, 0 not-applicable`; (e) the exemplar shows a real assertion seed, an actual-side def, and a real boundary call; (f) full unit suite green (49 v1 tests untouched + new) — v1 regression cover.
+
+**G2 — second corpus, different culprit:** recreate M4 indent0 if its recipe is recoverable AND its mutated method ≠ `addRowValues`; otherwise craft a fresh assertion-type mutation inside `putValue` (culprit must differ from G1's to test generalization, not memorization). One mutated run of the 2–3 covering suites → XMLs; same criteria (a)–(e); revert picocli after.
+
+Failure on any criterion → diagnose by measurement (print ranking table, boundary set, BFS frontier) before touching design; if the miss is *coverage cannot discriminate* → that is the measured v2.1 trigger, recorded in this spec's validation section.
+
+## Non-goals / honesty
+
+- **Localization quality is bounded by the coverage universe** (17 TextTable methods today). The gate measures the *mechanism* on a universe that contains the culprit; breadth is a `build_all` deployment parameter and the artifact always names its universe.
+- The matrix is method-level and cached at baseline SHA — candidates are *suspects by coverage agreement + static wiring*, not proven-executed-faulty lines. The render says so.
+- Ochiai with same-run greens is weak when the run has few/no greens (e.g. agent ran only the failing class with all tests red) — then ranking leans on reachability + boundary frequency and the artifact carries the flat/degraded marker rather than fake confidence.
+- Usefulness-to-agent (fewer exploration steps, cycles-to-green) remains the Agentic-Bench A/B hypothesis, not claimed here.
+
+## Self-review
+- Placeholders: none; v2.1 items are scoped out with explicit triggers, not TODOs.
+- Consistency: dispatch preserves the v1 exception contract verbatim; assertion applicability flips from "not applicable" (v1) to "applicable" (v2) and the accounting line is redefined accordingly — the spec states this is an intentional contract change.
+- Ambiguity: seed rule, hop caps (RD ≤2 test-side, BFS ≤3, guards ≤1), K=3, ε=0.05, line budgets (45 total / ≥15 assertion section in mixed mode) are all pinned; `[param]`-stripping and `__t__` mapping pinned.
+- Scope: one module + additive index/CLI/tool changes + two-corpus gate → single implementation plan.
