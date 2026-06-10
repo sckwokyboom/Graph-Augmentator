@@ -127,9 +127,11 @@ def slice_failure(test_id, cause, idx, package, project_root=None):
             p = v["properties"]
             fs.boundary.append(BoundaryCall(
                 tgt, p.get("CODE", ""), int(p.get("LINE_NUMBER", -1)), "actual-side"))
+    # frame.line == -1 (raw trace without line numbers) -> no seeds, empty scan:
+    # a resolved-but-empty slice by design; ranking still joins via the matrix.
     pre = [v for v in idx.children.get(m["id"], [])
            if 0 <= int(v.get("properties", {}).get("LINE_NUMBER", -1)) <= frame.line]
-    pre.sort(key=lambda v: frame.line - int(v["properties"].get("LINE_NUMBER", 0)))
+    pre.sort(key=lambda v: frame.line - int(v["properties"].get("LINE_NUMBER", -1)))
     for v in pre:
         tgt = _production_target(idx, v, package)
         if tgt and tgt not in seen:

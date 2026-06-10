@@ -60,6 +60,9 @@ def _export(tmp_path):
             "METHOD_FULL_NAME": "p.Tbl.get:java.lang.String()"}},
         {"id": "s_lit", "label": "LITERAL", "properties": {
             "CODE": '"x"', "LINE_NUMBER": 9, "PARENT_METHOD_ID": "m_t1"}},
+        {"id": "s_norm", "label": "CALL", "properties": {
+            "CODE": "this.norm(tbl)", "LINE_NUMBER": 9, "PARENT_METHOD_ID": "m_t1",
+            "METHOD_FULL_NAME": "p.TT.norm:java.lang.String(p.Tbl)"}},
         {"id": "s_flush", "label": "CALL", "properties": {
             "CODE": "tbl.flush()", "LINE_NUMBER": 11, "PARENT_METHOD_ID": "m_t1",
             "METHOD_FULL_NAME": "p.Tbl.flush:void()"}},
