@@ -123,7 +123,9 @@ def s_slice(c: Ctx) -> None:
          "--out", workdir, "--joern-home", joern_home], cwd=GT_ROOT)
     budgets = sorted(workdir.glob("*.budget.md"))
     assert len(budgets) == 1, f"expected exactly one budget slice, got {budgets}"
-    (c.out / "slices" / f"{c.method}.budget.md").write_text(budgets[0].read_text())
+    # JVM writes UTF-8 unconditionally; pin it so Windows locale can't mojibake.
+    (c.out / "slices" / f"{c.method}.budget.md").write_text(
+        budgets[0].read_text(encoding="utf-8"), encoding="utf-8")
 
 
 @stage("agent", outputs=lambda c: [])
