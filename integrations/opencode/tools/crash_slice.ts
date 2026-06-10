@@ -7,23 +7,23 @@ import { tool } from "@opencode-ai/plugin"
  * `<project>/.opencode/impact.json` with:
  *   "cpg_export": "/abs/path/to/export.json",   // Joern export (slice cache)
  *   "package":    "picocli."                    // project package prefix
+ *   "coverage":   "../.impact/coverage.json"   // optional; defaults to <project>/.impact/coverage.json
  * (`harness_path` is shared with the impact tool's config.)
  *
  * Shells to `harness.impact.crash_slice`: parses the gradle failure XMLs,
  * picks the root cause, and renders the stack spine annotated with a static
  * dependency corridor (possible guards + resolvable defs, file:line anchors,
- * FULL/FALLBACK confidence per frame). Exception failures only (assertion
- * failures are reported as not applicable).
+ * FULL/FALLBACK confidence per frame). Handles both exception failures (v1 corridor) and assertion failures (v2 aggregated localization; reads .impact/coverage.json when available).
  */
 export default tool({
   description:
-    "Explain a RED test that failed with an EXCEPTION. Returns a crash-slice: " +
-    "the failure's stack spine with file:line anchors, the seed statement per " +
-    "frame, possible controlling guards and data definitions around each hop, " +
-    "and per-frame confidence (FULL = backed by the code graph, FALLBACK = " +
-    "source quote only). Call right after a test run fails with an exception, " +
-    "BEFORE grepping the codebase — it replaces manual stack-chasing. Not for " +
-    "assertion failures (expected-vs-actual): those report as not applicable.",
+    "Explain RED tests after a failing run. Exception failures get a crash-slice " +
+    "(stack spine + static dependency corridor, FULL/FALLBACK confidence). " +
+    "Assertion failures (expected-vs-actual) get an aggregated localization " +
+    "hypothesis: test→production boundary, coverage×reachability-ranked suspect " +
+    "methods with confidence mode (CONTRAST/FREQUENCY/BOUNDARY-ONLY), and an " +
+    "exemplar corridor. Call right after a red test run, BEFORE grepping the " +
+    "codebase — it replaces manual stack-chasing and suspect hunting.",
   args: {
     test_results_dir: tool.schema
       .string()
@@ -35,7 +35,7 @@ export default tool({
   },
   async execute(args, context) {
     const cfgPath = `${context.worktree}/.opencode/impact.json`
-    let cfg: { harness_path: string; cpg_export?: string; package?: string }
+    let cfg: { harness_path: string; cpg_export?: string; package?: string; coverage?: string }
     try {
       cfg = await Bun.file(cfgPath).json()
     } catch {
@@ -52,14 +52,19 @@ export default tool({
         ? args.test_results_dir
         : `${context.worktree}/build/test-results/test`
     const out = `${context.worktree}/.opencode/crash-slice.md`
-    const proc = await Bun.$`python3 -m harness.impact.crash_slice --export ${cfg.cpg_export} --trace ${results} --package ${cfg.package} --project ${context.worktree} --out ${out}`
+    const coverage = cfg.coverage
+      ? cfg.coverage.startsWith("/")
+        ? cfg.coverage
+        : `${context.worktree}/.opencode/${cfg.coverage}`
+      : `${context.worktree}/.impact/coverage.json`
+    const proc = await Bun.$`python3 -m harness.impact.crash_slice --export ${cfg.cpg_export} --trace ${results} --package ${cfg.package} --project ${context.worktree} --coverage ${coverage} --out ${out}`
       .cwd(cfg.harness_path)
       .env({ ...process.env, PYTHONPATH: cfg.harness_path })
       .nothrow()
     const stdout = proc.stdout.toString()
     if (proc.exitCode !== 0) {
-      // Includes the honest "no applicable exception failure (assertion failures
-      // are v2)" path — surface it verbatim along with the applicability line.
+      // Honest not-applicable path (no project frames / unresolvable assertion
+      // set without a matrix) — surface stdout+stderr verbatim.
       return `crash_slice not applicable:\n${stdout}${proc.stderr.toString()}`
     }
     const slice = await Bun.file(out).text()
