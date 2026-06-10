@@ -45,6 +45,7 @@ def test_testcases_from_xml_pass_fail_and_skip(tmp_path):
     from harness.impact.stack_parse import testcases_from_xml
     xml = """<testsuite>
 <testcase classname="p.T" name="bad"><failure message="m" type="t">trace</failure></testcase>
+<testcase classname="p.T" name="err"><error message="m" type="t">etrace</error></testcase>
 <testcase classname="p.T" name="ok"/>
 <testcase classname="p.T" name="ign"><skipped/></testcase>
 <testcase classname="p.T" name="par[0]"/>
@@ -53,6 +54,7 @@ def test_testcases_from_xml_pass_fail_and_skip(tmp_path):
     f.write_text(xml)
     cases = testcases_from_xml(f)
     assert ("p.T", "bad", False, "trace") in cases
+    assert ("p.T", "err", False, "etrace") in cases
     assert ("p.T", "ok", True, "") in cases
     assert ("p.T", "par[0]", True, "") in cases
     assert all(n != "ign" for _, n, _, _ in cases)
