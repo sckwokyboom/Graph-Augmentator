@@ -74,6 +74,14 @@ CLI: `python3 -m harness.impact.crash_slice --export <export.json> --trace <file
 4. **Pass criteria:** (a) header shows `IllegalStateException: gt-crash-probe`; (b) deepest frame = injected throw line via fallback, tagged `FALLBACK`; (c) `addRowValues` frame shows call-site `putValue(row, col, values[col])` with guard `col < values.length` and def `values[col]`, tagged `FULL`; (d) overall mode `MIXED`; (e) ≤45 rendered lines; (f) end-to-end <10 s.
 5. Revert picocli.
 
+**Gate result (measured 2026-06-10): PASSED — all 6 criteria.** Artifact = 24 lines,
+0.6 s end-to-end, applicability 2/2. Deepest frame `[FALLBACK]` quoting the injected
+line (the cached stub was correctly demoted by the consistency check); `addRowValues:17380`
+`[FULL]` with seed `this.putValue(row, col, values[col])`, guard `col < values.length`,
+def `values[col]`; bonus corridor on the second overload frame (guard `row < maxRows`);
+`mode: MIXED`. One bug found and fixed by the gate: Joern synthesizes the `this.` receiver
+in CODE, which the consistency check falsely read as stale — now tolerated.
+
 **Applicability metric (logged whenever the tool runs over a result set):**
 `applicability_rate = exception failures with deepest project frame in production code / all red tests`. v1's value is bounded by this rate; evaluate v1 on the exception subset only, report the rate honestly alongside.
 
