@@ -291,10 +291,12 @@ def s_impact_data(c: Ctx) -> None:
     if c.with_mutation:
         raise SystemExit("--with-mutation: run producers/run_mutation flow first; "
                          "wire its mutation.json here (see impact-tool-state notes)")
-    write_artifacts(c.out / "impact", methods, coverage, mutation)
     universe = cov_dir / "executed_tests.txt"
-    assert universe.is_file() and universe.stat().st_size > 0, \
-        "coverage run produced no executed_tests.txt"
+    if not universe.is_file() or universe.stat().st_size == 0:
+        # Fail before writing any impact artifacts so the stage aborts cleanly.
+        raise RuntimeError("coverage run produced no executed_tests.txt — "
+                           "check the gradle :test task and the afterSuite hook")
+    write_artifacts(c.out / "impact", methods, coverage, mutation)
     (c.out / "impact" / "executed_tests.txt").write_text(
         universe.read_text(encoding="utf-8"), encoding="utf-8")
 
@@ -308,6 +310,8 @@ def _sha256(p: Path) -> str:
 
 
 def _git_sha(repo: Path) -> str:
+    # "unknown" is expected for .git-stripped checkouts (the bench's prepare.py
+    # deletes .git from fixtures; their sha is pinned in fixture.lock instead).
     r = subprocess.run(["git", "rev-parse", "HEAD"], cwd=repo,
                        capture_output=True, text=True)
     return r.stdout.strip() if r.returncode == 0 else "unknown"
@@ -315,8 +319,10 @@ def _git_sha(repo: Path) -> str:
 
 @stage("provenance", outputs=_prov_outputs)
 def s_provenance(c: Ctx) -> None:
-    files = sorted([*(c.out / "slices").glob("*-graph-slice*.md"),
-                    *(c.out / "impact").glob("*.json")])
+    candidates = [*(c.out / "slices").glob("*-graph-slice*.md"),
+                  *(c.out / "impact").glob("*.json"),
+                  c.out / "impact" / "executed_tests.txt"]
+    files = sorted(p for p in candidates if p.exists())
     (c.out / "provenance.json").write_text(json.dumps({
         "project_sha": _git_sha(c.project),
         "graph_tipper_sha": _git_sha(GT_ROOT),
