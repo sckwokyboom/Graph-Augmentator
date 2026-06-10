@@ -88,7 +88,7 @@ def _production_target(idx, vertex, package):
     if not tgt.startswith(package):
         return None
     tms = idx.methods_named(tgt)
-    if not tms or all(idx.is_test(t) for t in tms):
+    if not tms or all(idx.is_test_code(t) for t in tms):
         return None
     return tgt
 
@@ -239,7 +239,7 @@ def rank_candidates(slices, idx, package, matrix, passing,
                 if callee in have or not callee.startswith(package):
                     continue
                 tms = idx.methods_named(callee)
-                if not tms or all(idx.is_test(t) for t in tms):
+                if not tms or all(idx.is_test_code(t) for t in tms):
                     continue
                 have.add(callee)
                 cc = Candidate(fqn=callee, score=c.score, ef=c.ef, reachable=True,

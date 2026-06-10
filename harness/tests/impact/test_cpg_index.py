@@ -61,3 +61,14 @@ def test_methods_named_and_call_map(tmp_path):
     assert idx.methods_named("p.C.nope") == []
     # m1's children: s1 calls p.C.foo, s2 is <operator>.greaterThan (excluded)
     assert idx.call_map["p.C.callee"] == {"p.C.foo"}
+
+
+def test_is_test_code_covers_helpers_in_test_files():
+    from harness.impact.cpg_index import CpgIndex
+    helper = {"properties": {"IS_TEST": False, "FILENAME": "src/__t__/java/p/HT.java"}}
+    prod = {"properties": {"IS_TEST": False, "FILENAME": "src/main/java/p/C.java"}}
+    flagged = {"properties": {"IS_TEST": True, "FILENAME": "src/main/java/p/G.java"}}
+    assert CpgIndex.is_test_code(helper)
+    assert not CpgIndex.is_test_code(prod)
+    assert CpgIndex.is_test_code(flagged)
+    assert not CpgIndex.is_test_code({"properties": {}})

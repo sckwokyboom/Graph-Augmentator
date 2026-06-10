@@ -46,6 +46,9 @@ def _export(tmp_path):
         {"id": "m_norm", "label": "METHOD", "properties": {
             "FULL_NAME": "p.TT.norm:java.lang.String(p.Tbl)", "FILENAME": "src/__t__/java/p/TT.java",
             "LINE_NUMBER": 20, "LINE_NUMBER_END": 24, "IS_TEST": True}},
+        {"id": "m_helper", "label": "METHOD", "properties": {
+            "FULL_NAME": "p.TT.check:void(java.lang.String)", "FILENAME": "src/__t__/java/p/TT.java",
+            "LINE_NUMBER": 26, "LINE_NUMBER_END": 28, "IS_TEST": False}},
         # t1 statements
         {"id": "s_mk", "label": "CALL", "properties": {
             "CODE": "Tbl tbl = mk()", "LINE_NUMBER": 6, "PARENT_METHOD_ID": "m_t1",
@@ -64,6 +67,9 @@ def _export(tmp_path):
         {"id": "s_norm", "label": "CALL", "properties": {
             "CODE": "this.norm(tbl)", "LINE_NUMBER": 9, "PARENT_METHOD_ID": "m_t1",
             "METHOD_FULL_NAME": "p.TT.norm:java.lang.String(p.Tbl)"}},
+        {"id": "s_check", "label": "CALL", "properties": {
+            "CODE": 'check("k")', "LINE_NUMBER": 8, "PARENT_METHOD_ID": "m_t1",
+            "METHOD_FULL_NAME": "p.TT.check:void(java.lang.String)"}},
         {"id": "s_flush", "label": "CALL", "properties": {
             "CODE": "tbl.flush()", "LINE_NUMBER": 11, "PARENT_METHOD_ID": "m_t1",
             "METHOD_FULL_NAME": "p.Tbl.flush:void()"}},
@@ -111,6 +117,7 @@ def test_boundary_line_filter_labels_and_helper_skip(tmp_path):
     assert "p.Tbl.flush" not in by_fqn                       # line 11 > assertion line 9
     assert "p.TT.mk" not in by_fqn                           # unresolved helper skipped
     assert "p.TT.norm" not in by_fqn                         # test-class target skipped
+    assert "p.TT.check" not in by_fqn                    # helper in test FILE (IS_TEST=false) skipped
 
 
 def test_unresolved_test_method_falls_back(tmp_path):

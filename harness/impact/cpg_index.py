@@ -55,6 +55,17 @@ class CpgIndex:
         return str(method_vertex.get("properties", {}).get("IS_TEST")).lower() == "true"
 
     @staticmethod
+    def is_test_code(method_vertex):
+        """Test code = @Test-flagged (IS_TEST) OR declared in a test source file
+        (the export rewrites test dirs to src/__t__/...). The export sets IS_TEST
+        only on @Test methods, so plain helper methods of test classes need the
+        FILENAME marker — measured on picocli: HelpTest.usageString/assertEquals
+        carry IS_TEST=false."""
+        p = method_vertex.get("properties", {})
+        return (str(p.get("IS_TEST")).lower() == "true"
+                or "/__t__/" in (p.get("FILENAME") or ""))
+
+    @staticmethod
     def map_filename(rel):
         """The export rewrites test source dirs to src/__t__/...; map back for disk reads."""
         return rel.replace("/__t__/", "/test/") if rel else rel
