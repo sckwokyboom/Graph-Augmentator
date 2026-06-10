@@ -1,8 +1,10 @@
 {
-  "_comment": "Copy to <project>/.opencode/impact.json. Artifact paths are resolved relative to THIS file's directory (or use absolute paths). harness_path is the Graph-Tipper repo root (the dir containing the `harness/` package).",
+  "_comment": "Copy to <project>/.opencode/impact.json. Artifact paths are resolved relative to THIS file's directory (or use absolute paths). harness_path is the Graph-Tipper repo root (the dir containing the `harness/` package). cpg_export + package are used by the crash_slice tool.",
   "harness_path": "/absolute/path/to/Graph-Tipper",
   "methods": "../.impact/methods.json",
   "coverage": "../.impact/coverage.json",
   "mutation": "../.impact/mutation.json",
-  "total_tests": 2233
+  "total_tests": 2233,
+  "cpg_export": "/absolute/path/to/slice/.cache/<sha>/export/export.json",
+  "package": "picocli."
 }

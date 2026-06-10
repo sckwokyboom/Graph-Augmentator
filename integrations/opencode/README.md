@@ -1,4 +1,4 @@
-# OpenCode integration — `impact` tool
+# OpenCode integration — `impact` + `crash_slice` tools
 
 A custom [OpenCode](https://opencode.ai/docs/custom-tools/) tool that gives the model a
 **per-diff test-impact report** for the current change: which tests *verify* it (Tier 1),
@@ -59,6 +59,16 @@ The tool returns markdown like:
 ### Tier 1 — VERIFIERS (8): ./gradlew test --tests picocli.HelpTest …
 ### Tier 2 — COVERERS (404)
 ```
+
+## Second tool: `crash_slice` (red exception tests)
+
+`tools/crash_slice.ts` — call after a test run fails with an **exception**. Returns the
+crash-slice: stack spine with `file:line`, seed statement per frame, possible controlling
+guards + resolvable defs, per-frame `FULL`/`FALLBACK` confidence. Assertion failures
+report as "not applicable" (v2). Config needs two extra keys in `.opencode/impact.json`:
+`cpg_export` (the Joern export.json from the slice cache) and `package` (project package
+prefix). The agent flow: run tests → red with exception → `crash_slice` → read the
+corridor instead of grepping the stack by hand.
 
 ## Quick test without OpenCode
 The wrapper just shells to the core, so you can run the exact same thing by hand:

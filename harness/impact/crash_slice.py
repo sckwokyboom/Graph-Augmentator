@@ -124,7 +124,8 @@ def build_slice(cause, idx, package, project_root=None, k=6):
         raise ValueError(f"no frames under package {package!r} in the root cause")
     deepest = frames[0]
     m0 = idx.resolve_method(deepest.cls, deepest.method, deepest.line)
-    if m0 is not None and m0["properties"].get("IS_TEST") == "true":
+    # IS_TEST is a JSON boolean in the real export (and may be a string elsewhere)
+    if m0 is not None and str(m0["properties"].get("IS_TEST")).lower() == "true":
         raise AssertionCaseError(
             f"deepest project frame {deepest.cls}.{deepest.method} is test code — "
             "assertion-failure slicing is v2; v1 handles exceptions thrown from "

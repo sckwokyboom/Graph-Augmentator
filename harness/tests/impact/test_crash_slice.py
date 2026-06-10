@@ -16,13 +16,13 @@ def _export(tmp_path):
     data = {"vertices": [
         {"id": "mp", "label": "METHOD", "properties": {
             "FULL_NAME": "p.Table.putValue:Cell(int,int,Text)", "FILENAME": "src/p/Table.java",
-            "LINE_NUMBER": 48, "LINE_NUMBER_END": 52, "IS_TEST": "false"}},
+            "LINE_NUMBER": 48, "LINE_NUMBER_END": 52, "IS_TEST": False}},
         {"id": "mc", "label": "METHOD", "properties": {
             "FULL_NAME": "p.Table.addRowValues:void()", "FILENAME": "src/p/Table.java",
-            "LINE_NUMBER": 18, "LINE_NUMBER_END": 25, "IS_TEST": "false"}},
+            "LINE_NUMBER": 18, "LINE_NUMBER_END": 25, "IS_TEST": False}},
         {"id": "mt", "label": "METHOD", "properties": {
             "FULL_NAME": "p.TableTest.testAdd:void()", "FILENAME": "src/t/TableTest.java",
-            "LINE_NUMBER": 5, "LINE_NUMBER_END": 9, "IS_TEST": "true"}},
+            "LINE_NUMBER": 5, "LINE_NUMBER_END": 9, "IS_TEST": True}},
         # stale stub body at the deepest frame's line (real CPG has putValue stubbed)
         {"id": "stub", "label": "CALL", "properties": {
             "CODE": "throw new UnsupportedOperationException(\"TODO\")", "LINE_NUMBER": 50,

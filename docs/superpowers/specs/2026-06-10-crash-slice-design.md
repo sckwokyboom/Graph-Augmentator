@@ -85,6 +85,8 @@ in CODE, which the consistency check falsely read as stale — now tolerated.
 **Applicability metric (logged whenever the tool runs over a result set):**
 `applicability_rate = exception failures with deepest project frame in production code / all red tests`. v1's value is bounded by this rate; evaluate v1 on the exception subset only, report the rate honestly alongside.
 
+**Measured (2026-06-10):** throw-injection corpus → **2/2 applicable**; cellswap-mutation corpus (118 `ComparisonFailure` red tests) → **0/118 applicable** with the explicit "assertion failures are v2" exit. The volume of real-world red tests sits in the assertion case — v2 is where the applicability is, exactly as the external review predicted. The measurement also caught a real bug: the export emits `IS_TEST` as a JSON **boolean**, the detector compared against the string `"true"` (unit fixture had the wrong shape; fixed both).
+
 ## Non-goals / honesty
 
 - Observability, not an oracle: the corridor says *what is statically wired to the failing line*, with the stack guaranteeing only the inter-procedural spine — guards/defs near a seed may include not-executed statements (no line-coverage filter in v1).
