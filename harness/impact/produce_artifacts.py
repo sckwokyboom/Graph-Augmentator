@@ -128,9 +128,70 @@ def s_slice(c: Ctx) -> None:
         budgets[0].read_text(encoding="utf-8"), encoding="utf-8")
 
 
-@stage("agent", outputs=lambda c: [])
+BB_VERSION = "1.14.18"
+BB_URL = (f"https://repo1.maven.org/maven2/net/bytebuddy/byte-buddy/"
+          f"{BB_VERSION}/byte-buddy-{BB_VERSION}.jar")
+AGENT_MANIFEST = ("Premain-Class: gtcov.Agent\n"
+                  "Can-Retransform-Classes: true\n"
+                  "Can-Redefine-Classes: true\n")
+AGENT_DIR = GT_ROOT / "harness" / "impact" / "producers" / "coverage-agent"
+
+
+def find_bytebuddy() -> Path | None:
+    hits = sorted(Path.home().glob(f".gradle/caches/**/byte-buddy-{BB_VERSION}.jar"))
+    if hits:
+        return hits[0]
+    hits = [p for p in Path.home().glob(".gradle/caches/**/byte-buddy-*.jar")
+            if "agent" not in p.name and "dep" not in p.name]
+    return sorted(hits)[0] if hits else None
+
+
+def _jdk_tool(c: Ctx, name: str) -> str:
+    exe = name + (".exe" if os.name == "nt" else "")
+    return str(Path(c.java_home) / "bin" / exe) if c.java_home else name
+
+
+def _agent_outputs(c: Ctx) -> list[Path]:
+    return [AGENT_DIR / "gtcov-agent.jar", AGENT_DIR / "gtcov-boot.jar"]
+
+
+@stage("agent", outputs=_agent_outputs)
 def s_agent(c: Ctx) -> None:
-    raise NotImplementedError("stage body lands in Task 10")
+    build = AGENT_DIR / "build"
+    classes = build / "classes"
+    if build.exists():
+        import shutil as _sh
+        _sh.rmtree(build)
+    classes.mkdir(parents=True)
+    bb = find_bytebuddy()
+    if bb is None:
+        bb = build / f"byte-buddy-{BB_VERSION}.jar"
+        print(f"[produce] downloading {BB_URL}", file=sys.stderr)
+        urllib.request.urlretrieve(BB_URL, bb)
+    srcs = sorted((AGENT_DIR / "src" / "gtcov").glob("*.java"))
+    run([_jdk_tool(c, "javac"), "--release", "11", "-cp", bb, "-d", classes, *srcs],
+        cwd=AGENT_DIR)
+    # boot jar: Recorder + ValueRecorder only (bootstrap loader)
+    boot = build / "boot" / "gtcov"
+    boot.mkdir(parents=True)
+    for cls in ("Recorder.class", "ValueRecorder.class"):
+        (boot / cls).write_bytes((classes / "gtcov" / cls).read_bytes())
+    run([_jdk_tool(c, "jar"), "cf", AGENT_DIR / "gtcov-boot.jar",
+         "-C", build / "boot", "gtcov"], cwd=AGENT_DIR)
+    # agent jar: classes minus the two boot classes + exploded byte-buddy
+    agent = build / "agent"
+    (agent / "gtcov").mkdir(parents=True)
+    for f in (classes / "gtcov").glob("*.class"):
+        if f.name not in ("Recorder.class", "ValueRecorder.class"):
+            (agent / "gtcov" / f.name).write_bytes(f.read_bytes())
+    with zipfile.ZipFile(bb) as zf:
+        for info in zf.infolist():
+            if info.filename.startswith("META-INF/") or info.filename == "module-info.class":
+                continue
+            zf.extract(info, agent)
+    (build / "MANIFEST.MF").write_text(AGENT_MANIFEST)
+    run([_jdk_tool(c, "jar"), "cfm", AGENT_DIR / "gtcov-agent.jar",
+         build / "MANIFEST.MF", "-C", agent, "."], cwd=AGENT_DIR)
 
 
 @stage("capture", outputs=lambda c: [])
