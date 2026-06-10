@@ -172,3 +172,31 @@ def test_cli_pure_assertion_exits_zero(tmp_path, capsys, monkeypatch):
     main()                                                     # must NOT raise SystemExit
     assert "1 assertion-sliced" in capsys.readouterr().out
     assert "# Crash slice — 1 assertion failures" in out.read_text()
+
+
+def test_cli_ranked_only_suffix_for_uncovered_test_method(tmp_path, capsys, monkeypatch):
+    import json as _json
+    import sys
+    from harness.impact.crash_slice import main
+    export = _export(tmp_path)
+    project = _project(tmp_path)
+    trace = ("org.junit.ComparisonFailure: expected:&lt;1&gt; but was:&lt;2&gt;\n"
+             "\tat org.junit.Assert.assertEquals(Assert.java:117)\n"
+             "\tat p.OtherTest.tx(OtherTest.java:5)\n")
+    xml = (f'<testsuite><testcase classname="p.OtherTest" name="tx">'
+           f'<failure message="m" type="org.junit.ComparisonFailure">{trace}</failure>'
+           f'</testcase></testsuite>')
+    xdir = tmp_path / "ro-results"
+    xdir.mkdir()
+    (xdir / "TEST-p.OtherTest.xml").write_text(xml)
+    cov = tmp_path / "cov.json"
+    cov.write_text(_json.dumps({"p.Table.addRowValues": ["p.OtherTest.tx"]}))
+    out = tmp_path / "crash-ro.md"
+    monkeypatch.setattr(sys, "argv", [
+        "crash_slice", "--export", str(export), "--trace", str(xdir),
+        "--package", "p.", "--project", str(project),
+        "--coverage", str(cov), "--out", str(out)])
+    main()
+    captured = capsys.readouterr().out
+    assert "1 assertion-sliced (1 ranked-only)" in captured
+    assert out.exists()

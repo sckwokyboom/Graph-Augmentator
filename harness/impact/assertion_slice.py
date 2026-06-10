@@ -52,6 +52,7 @@ class AssertionReport:
     n_failures: int
     n_sliced: int
     n_na: int
+    n_ranked_only: int
     by_class: dict
     headline: str
     boundary: list                  # [(BoundaryCall, n_supporting_tests)]
@@ -284,7 +285,10 @@ def build_assertion_report(failures, idx, package, matrix=None, passing=(),
         raise ValueError("build_assertion_report requires a non-empty failure set")
     slices = [slice_failure(tid, cause, idx, package, project_root)
               for tid, cause in failures]
+    # n_sliced counts matrix-joined failures as applicable BY DESIGN (spec §43);
+    # n_ranked_only says how many of those joined by test-id alone (no CPG corridor).
     n_sliced = sum(1 for s in slices if s.resolved or matrix is not None)
+    n_ranked_only = sum(1 for s in slices if not s.resolved and matrix is not None)
     by_class = {}
     for s in slices:
         cls = s.test_id.rsplit(".", 1)[0] if "." in s.test_id else s.test_id
@@ -305,9 +309,9 @@ def build_assertion_report(failures, idx, package, matrix=None, passing=(),
         universe = "no coverage matrix"
     exemplar = (next((s for s in slices if s.seeds), None)
                 or next((s for s in slices if s.source_line), None))
-    return AssertionReport(len(slices), n_sliced, len(slices) - n_sliced, by_class,
-                           headline, aggregate_boundary(slices), candidates, mode,
-                           notes, universe, exemplar)
+    return AssertionReport(len(slices), n_sliced, len(slices) - n_sliced, n_ranked_only,
+                           by_class, headline, aggregate_boundary(slices), candidates,
+                           mode, notes, universe, exemplar)
 
 
 _LOW_MODES = {"FREQUENCY", "BOUNDARY-ONLY"}

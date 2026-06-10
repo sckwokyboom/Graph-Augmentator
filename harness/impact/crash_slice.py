@@ -181,6 +181,7 @@ def render(cause, frame_slices, max_lines=45):
 
 def main():
     import argparse
+    import sys
     import json as _json
     from harness.impact.assertion_slice import build_assertion_report, render_assertion
     from harness.impact.cpg_index import CpgIndex, load_index
@@ -226,6 +227,8 @@ def main():
             continue
         try:
             c, fss = build_slice(cause, idx, a.package, a.project, a.frames)
+        # Defensive backstop: pre-classification above uses the same resolve as
+        # build_slice, so this should be unreachable — kept in case they diverge.
         except AssertionCaseError:
             assertion_failures.append((test_id, cause))
             continue
@@ -240,13 +243,20 @@ def main():
         matrix = None
         if cov and Path(cov).exists():
             matrix = _json.loads(Path(cov).read_text())
+        elif a.coverage:
+            # explicit path missing is a config error worth surfacing; the silent
+            # default-path-absent case is expected (degrades to BOUNDARY-ONLY)
+            print(f"warning: --coverage {a.coverage} not found — "
+                  "falling back to boundary-only localization", file=sys.stderr)
         report = build_assertion_report(assertion_failures, idx, a.package,
                                         matrix=matrix, passing=passing,
                                         project_root=a.project, k=a.top)
         n_na += report.n_na
     n_assert = report.n_sliced if report else 0
 
-    print(f"applicability: {n_exc} exception-sliced, {n_assert} assertion-sliced, "
+    ranked_only = report.n_ranked_only if report else 0
+    suffix = f" ({ranked_only} ranked-only)" if ranked_only else ""
+    print(f"applicability: {n_exc} exception-sliced, {n_assert} assertion-sliced{suffix}, "
           f"{n_na} not-applicable of {len(reds)} red tests")
     parts = []
     if first_exc is not None:
