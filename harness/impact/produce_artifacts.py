@@ -11,6 +11,16 @@ Output layout (the contract consumed by Agentic-Bench's prepare.py):
   out/impact/{methods,coverage,mutation}.json impact-tool data
   out/impact/executed_tests.txt               suite universe (one test per line)
   out/provenance.json
+
+--body-from <dir> contract
+  When supplied, the gen stage replaces the **Current body:** fenced java block
+  in BOTH compact and verbose artifacts with the body of ``method`` extracted
+  from the Java source tree rooted at <dir>.  Use this when the A/B pipeline
+  must hand the agent a stub body (the experiment's answer lives in the FULL
+  tree; showing it in the artifact would be a validity leak).  The helper
+  assert_no_leak() verifies that no 5+-line run of "unique-to-full" body lines
+  survives in the final artifact; it raises RuntimeError naming the first
+  offending line if they do.
 """
 from __future__ import annotations
 
@@ -45,6 +55,103 @@ def parse_tests(value: str) -> list[str]:
     return [t.strip() for t in value.split(",") if t.strip()]
 
 
+def extract_method_block(java_file: Path, method: str) -> tuple[int, int, str]:
+    """1-based (first, last) line range and exact text of ``method``'s declaration..closing brace.
+
+    Locates the single declaration line matching
+    ``r'^\\s*(public|protected|private).*\\b<method>\\s*\\('``,
+    then brace-matches from it (counting {{ }} per char).
+    Raises RuntimeError when the method is not found or not unique.
+    """
+    import re as _re
+    decl_re = _re.compile(
+        r"^\s*(public|protected|private)\b.*\b" + _re.escape(method) + r"\s*\(")
+    source = java_file.read_text(encoding="utf-8")
+    lines = source.splitlines()
+    matches = [(i + 1, l) for i, l in enumerate(lines) if decl_re.match(l)]
+    if not matches:
+        raise RuntimeError(f"extract_method_block: method {method!r} not found in {java_file}")
+    if len(matches) > 1:
+        raise RuntimeError(
+            f"extract_method_block: method {method!r} not unique in {java_file} "
+            f"(found at lines {[ln for ln, _ in matches]})")
+    first_1based, _ = matches[0]
+    # Brace-match from the declaration line to find the closing brace.
+    depth = 0
+    last_1based = first_1based
+    for i in range(first_1based - 1, len(lines)):
+        for ch in lines[i]:
+            if ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+                if depth == 0:
+                    last_1based = i + 1
+                    block_text = "\n".join(lines[first_1based - 1: last_1based])
+                    return first_1based, last_1based, block_text
+    raise RuntimeError(
+        f"extract_method_block: unmatched braces for {method!r} starting at line {first_1based}")
+
+
+def swap_body_section(artifact: str, block: str, first: int, last: int) -> str:
+    """Replace the artifact's '**Current body:**' fenced java block with ``block``,
+    and rewrite the '(lines A–B)' range in the '**File:**' line to first–last.
+
+    Raises RuntimeError if the section/fence cannot be located.
+    """
+    import re as _re
+    # Rewrite the (lines A–B) range in the File line. The en dash is U+2013.
+    file_re = _re.compile(r"(\*\*File:\*\*[^\n]*\(lines\s*)(\d+)[––](\d+)(\))")
+    new_artifact = file_re.sub(
+        lambda m: f"{m.group(1)}{first}–{last}{m.group(4)}", artifact)
+    if new_artifact == artifact:
+        raise RuntimeError(
+            "swap_body_section: could not locate '**File:**' line with (lines A–B) range")
+
+    # Replace the ```java fence after **Current body:**
+    body_re = _re.compile(
+        r"(\*\*Current body:\*\*\s*\n```java\n)(.*?)(```)",
+        _re.DOTALL)
+    m = body_re.search(new_artifact)
+    if m is None:
+        raise RuntimeError(
+            "swap_body_section: could not locate '**Current body:**' java fence in artifact")
+    replacement = m.group(1) + block + "\n" + m.group(3)
+    new_artifact = new_artifact[: m.start()] + replacement + new_artifact[m.end():]
+    return new_artifact
+
+
+def assert_no_leak(artifact: str, full_block: str, stub_block: str) -> None:
+    """Raise RuntimeError if ``artifact`` contains any run of 5+ consecutive lines
+    that appear in ``full_block`` but NOT in ``stub_block``.
+
+    This guards against the full implementation leaking into an artifact that
+    should only show the stub body.
+    """
+    stub_lines = set(l.strip() for l in stub_block.splitlines() if l.strip())
+    full_lines = [l for l in full_block.splitlines() if l.strip()]
+    # Unique-to-full: lines present in full body but absent from stub
+    unique_full = [l for l in full_lines if l.strip() not in stub_lines]
+    # Require a run of at least 5 unique lines to flag as a leak (shorter runs
+    # may be coincidental blank lines / braces shared between implementations).
+    unique_full_stripped = [l.strip() for l in unique_full if l.strip()]
+    artifact_text = artifact
+    run = 0
+    first_leak = None
+    for line in unique_full_stripped:
+        if line in artifact_text:
+            run += 1
+            if first_leak is None:
+                first_leak = line
+            if run >= 5:
+                raise RuntimeError(
+                    f"assert_no_leak: full-body content leaked into artifact; "
+                    f"first leaked line: {first_leak!r}")
+        else:
+            run = 0
+            first_leak = None
+
+
 def gradlew_cmd(windows: bool = (os.name == "nt")) -> str:
     return "gradlew.bat" if windows else "./gradlew"
 
@@ -74,6 +181,7 @@ class Ctx:
     java_home: str | None
     with_mutation: bool
     force: bool
+    body_from: Path | None = None  # when set, gen stage swaps Current body: with stub from this tree
 
     @property
     def method(self) -> str:
@@ -254,6 +362,29 @@ def s_gen(c: Ctx) -> None:
     roots = [str(c.project) + os.sep, str(c.project).replace("\\", "/") + "/"]
     compact = scrub_paths(build(budget, c.out / "capture", c.target_fqn), roots)
     verbose = scrub_paths(budget.read_text(encoding="utf-8"), roots)
+
+    if c.body_from is not None:
+        # Derive the relative file path from the artifact's **File:** line.
+        import re as _re
+        file_m = _re.search(r"\*\*File:\*\*\s*`([^`]+)`", compact)
+        if file_m is None:
+            raise RuntimeError("s_gen: could not locate **File:** line in compact artifact")
+        rel_file = file_m.group(1)
+        stub_java = c.body_from / rel_file
+        if not stub_java.exists():
+            raise RuntimeError(f"s_gen: --body-from file not found: {stub_java}")
+        stub_first, stub_last, stub_block = extract_method_block(stub_java, c.method)
+
+        # Also extract the full-tree body for the leak guard.
+        full_java = c.project / rel_file
+        _, _, full_block = extract_method_block(full_java, c.method)
+
+        compact = swap_body_section(compact, stub_block, stub_first, stub_last)
+        verbose = swap_body_section(verbose, stub_block, stub_first, stub_last)
+
+        assert_no_leak(compact, full_block, stub_block)
+        assert_no_leak(verbose, full_block, stub_block)
+
     (c.out / "slices" / f"{c.method}-graph-slice.md").write_text(compact, encoding="utf-8")
     (c.out / "slices" / f"{c.method}-graph-slice-verbose.md").write_text(verbose, encoding="utf-8")
 
@@ -365,10 +496,15 @@ def main(argv=None) -> int:
     ap.add_argument("--force", action="store_true")
     ap.add_argument("--only", default=None)
     ap.add_argument("--java-home", default=os.environ.get("JAVA_HOME"))
+    ap.add_argument("--body-from", type=Path, default=None,
+                    help="Root of a Java source tree whose version of <method> replaces the "
+                         "'Current body:' block in both compact and verbose artifacts. "
+                         "Use when the agent must see a stub, not the reference implementation.")
     a = ap.parse_args(argv)
     ctx = Ctx(a.project.resolve(), a.target_fqn, a.slice_target,
               parse_tests(a.tests), a.out.resolve(), a.java_home,
-              a.with_mutation, a.force)
+              a.with_mutation, a.force,
+              body_from=a.body_from.resolve() if a.body_from else None)
     (ctx.out / "slices").mkdir(parents=True, exist_ok=True)
     (ctx.out / "impact").mkdir(parents=True, exist_ok=True)
     execute(ctx, a.only)
