@@ -2,6 +2,7 @@
 import http.server
 import sys
 import threading
+import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
@@ -61,17 +62,31 @@ class _BlobHandler(http.server.BaseHTTPRequestHandler):
             self.connection.close()
             return
 
+        # If stall_after is set AND this is the first request, send partial body
+        # then go silent WITHOUT closing — simulates a half-dead connection.
+        stall_after: int = getattr(self.server, "stall_after", 0)
+        if stall_after and not getattr(self.server, "_first_done", False):
+            self.server._first_done = True
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(blob)))
+            self.end_headers()
+            self.wfile.write(blob[:stall_after])
+            self.wfile.flush()
+            time.sleep(3)  # longer than the client's read timeout in the test
+            return
+
         self.send_response(200)
         self.send_header("Content-Length", str(len(blob)))
         self.end_headers()
         self.wfile.write(blob)
 
 
-def _make_server(drop_after: int = 0, range_supported: bool = True):
+def _make_server(drop_after: int = 0, range_supported: bool = True, stall_after: int = 0):
     """Spin up a ThreadingHTTPServer on a random port; return (server, url)."""
     server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _BlobHandler)
     server.drop_after = drop_after
     server.range_supported = range_supported
+    server.stall_after = stall_after
     server.range_seen = False
     server._first_done = False
     t = threading.Thread(target=server.serve_forever, daemon=True)
@@ -123,6 +138,19 @@ def test_download_resumes_after_drop(tmp_path):
         _download(url, dst, attempts=10)
         assert dst.read_bytes() == _BLOB
         assert server.range_seen, "expected at least one Range request"
+    finally:
+        server.shutdown()
+
+
+def test_download_times_out_on_stall_and_recovers(tmp_path):
+    """Server sends part of the body then goes silent without closing (half-dead
+    connection). Without a socket timeout the read would hang forever; with it,
+    _download must time out, retry, and still produce the full blob."""
+    server, url = _make_server(stall_after=100_000)
+    try:
+        dst = tmp_path / "out.bin"
+        _download(url, dst, attempts=10, timeout=0.5)
+        assert dst.read_bytes() == _BLOB
     finally:
         server.shutdown()
 

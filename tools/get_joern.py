@@ -36,7 +36,7 @@ def is_installed(home: Path, windows: bool = (os.name == "nt")) -> bool:
     return launcher_path(home, windows).is_file()
 
 
-def _download(url: str, dst: Path, attempts: int = 10) -> None:
+def _download(url: str, dst: Path, attempts: int = 10, timeout: float = 60.0) -> None:
     """Stream *url* to *dst* in ~1 MiB chunks with resume-on-retry.
 
     Resume logic:
@@ -62,7 +62,9 @@ def _download(url: str, dst: Path, attempts: int = 10) -> None:
             if have:
                 req.add_header("Range", f"bytes={have}-")
 
-            with urllib.request.urlopen(req) as resp:
+            # timeout: a half-dead connection must raise (TimeoutError ⊂ OSError)
+            # and fall into the retry path instead of hanging the read forever.
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
                 status = resp.status
                 if status == 206:
                     # Server honours the Range header — append to existing bytes
