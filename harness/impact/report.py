@@ -48,6 +48,12 @@ def render_report(r: ImpactResult, total_tests: int) -> str:
         out.append(f"## Affected tests (coverage-sound: {len(r.affected)})\n")
     out.append(f"### Tier 1 — VERIFIERS ({len(r.tier1)}) — run every iteration")
     out.append("```\n" + _scoped_command(r.tier1) + "\n```")
+    if not r.tier1:
+        out.append(
+            "_No Tier-1 verifiers — either this project has no mutation data, or no "
+            "covering test kills a mutant in the changed code. A green Tier-2 run is "
+            "coverage, NOT mutation-proof: treat the Tier-2 coverers + the full suite "
+            "as the source of truth here._")
     out.append(f"### Tier 2 — COVERERS ({len(r.tier2)}) — run at final validation only")
     if r.tier2:
         out.append("  " + ", ".join(sorted(r.tier2)[:20]) + (" …" if len(r.tier2) > 20 else ""))
