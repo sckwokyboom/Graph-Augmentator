@@ -40,3 +40,34 @@ def test_changed_method_outside_any_range_is_dropped():
 +y
 """
     assert changed_methods(diff, IDX) == set()
+
+
+def test_attributes_by_deleted_side_not_grown_new_side():
+    """The picocli putValue bug: implementing a stubbed method grows the NEW side
+    across the FOLLOWING methods' (seed-coords) spans. Attributing by the NEW side
+    false-flags those neighbours; attributing by the DELETED side (the stub the
+    edit removed) flags only the method actually changed."""
+    idx = MethodIndex({
+        "p.T.putValue": {"file": "src/X.java", "start": 10, "end": 12},  # 3-line stub
+        "p.T.length":   {"file": "src/X.java", "start": 13, "end": 16},
+    })
+    diff = (
+        "--- a/src/X.java\n"
+        "+++ b/src/X.java\n"
+        "@@ -10,3 +10,6 @@\n"
+        " public Cell putValue(...) {\n"                       # context: old 10
+        "-    throw new UnsupportedOperationException();\n"     # deleted: old 11
+        "-}\n"                                                  # deleted: old 12
+        "+    impl1\n+    impl2\n+    impl3\n+    impl4\n+}\n"   # additions (new side grows)
+        " public int length() {\n"                             # context: old 13
+    )
+    assert changed_methods(diff, idx) == {"p.T.putValue"}
+
+
+def test_pure_insertion_attributed_to_enclosing_method_via_anchor():
+    """An insertion with no deletions still attributes to the method containing the
+    base anchor line (so a body-only addition isn't silently dropped)."""
+    idx = MethodIndex({"p.T.m": {"file": "src/X.java", "start": 10, "end": 30}})
+    diff = ("--- a/src/X.java\n+++ b/src/X.java\n"
+            "@@ -15,0 +16,2 @@\n+added1\n+added2\n")
+    assert changed_methods(diff, idx) == {"p.T.m"}
