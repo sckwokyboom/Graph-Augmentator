@@ -13,9 +13,23 @@ def test_parse_groups_by_method_dedups_and_splits(tmp_path):
     ex = parse_values([p])
     assert set(ex.keys()) == {"p.C.m", "p.OTHER.n"}
     rows = ex["p.C.m"]
-    assert {"args": ["0", "0", "abc"], "result": "Cell{column=0, row=0}", "throws": False} in rows
+    assert {"args": ["0", "0", "abc"], "result": "Cell{column=0, row=0}", "throws": False,
+            "test": None} in rows
     assert any(r["throws"] and "rowCount=0" in r["result"] for r in rows)
     assert len(rows) == 2  # duplicate collapsed
+
+
+def test_parse_values_four_column_with_test_attribution(tmp_path):
+    p = tmp_path / "values.1.tsv"
+    p.write_text(
+        "picocli.X.putValue\tpicocli.HelpTest.testFoo\t0 | 1 | abc\t=> Cell{column=1, row=0}\n"
+        "picocli.X.putValue\t-\t9 | 0 | z\t=> throws IllegalArgumentException: Cannot write to row 9\n"
+    )
+    ex = parse_values([p])
+    assert ex["picocli.X.putValue"][0]["test"] == "picocli.HelpTest.testFoo"
+    assert ex["picocli.X.putValue"][0]["args"] == ["0", "1", "abc"]
+    assert ex["picocli.X.putValue"][1]["test"] is None          # "-" → None
+    assert ex["picocli.X.putValue"][1]["throws"] is True
 
 
 def test_limit_caps_examples(tmp_path):

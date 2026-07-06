@@ -1,7 +1,10 @@
 """Parse the agent's values.<pid>.tsv dump into per-method example records.
 
-Row format: "<method_fqn>\t<arg0> | <arg1> | ...\t=> <result>"  where <result> is a value
-or "throws <Type>[: msg]". Examples are deduped (set semantics from the agent) and capped.
+Row formats (autodetected per line):
+  legacy: "<method_fqn>\t<arg0> | <arg1> | ...\t=> <result>"
+  4-col:  "<method_fqn>\t<test_fqn|->\t<arg0> | <arg1> | ...\t=> <result>"
+where <result> is a value or "throws <Type>[: msg]". Examples are deduped (set
+semantics from the agent) and capped. Records carry "test" (None for legacy/"-").
 """
 import glob
 from pathlib import Path
@@ -15,9 +18,17 @@ def parse_values(paths, limit=5):
             if not line or "\t=> " not in line:
                 continue
             head, result = line.split("\t=> ", 1)
-            method, _, argstr = head.partition("\t")
+            parts = head.split("\t")
+            if len(parts) == 3:                      # 4-col: method \t test \t args
+                method, test, argstr = parts
+                test = None if test == "-" else test
+            elif len(parts) == 2:                    # legacy: method \t args
+                (method, argstr), test = parts, None
+            else:
+                continue
             args = [a.strip() for a in argstr.split(" | ")] if argstr else []
-            rec = {"args": args, "result": result, "throws": result.startswith("throws ")}
+            rec = {"args": args, "result": result, "throws": result.startswith("throws "),
+                   "test": test}
             key = (method, tuple(args), result)
             if key in seen.setdefault(method, set()):
                 continue
