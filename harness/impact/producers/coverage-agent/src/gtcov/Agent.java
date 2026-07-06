@@ -26,7 +26,9 @@ import static net.bytebuddy.matcher.ElementMatchers.not;
  * Premain for the in-JVM coverage agent.
  *
  * Agent args (comma-separated key=value): out=<dir>, includes=<prefix;prefix;...>,
- * boot=<path to gtcov-boot.jar> (optional; defaults to gtcov-boot.jar beside this jar).
+ * boot=<path to gtcov-boot.jar> (optional; defaults to gtcov-boot.jar beside this jar),
+ * capture=<fqn;fqn;...> (value capture points), vcap=<n>/vexc=<n> (per-(method,test)
+ * sample caps for ValueRecorder; defaults 6/2).
  */
 public final class Agent {
     private Agent() {}
@@ -39,6 +41,8 @@ public final class Agent {
         // Project package prefix (tests + source). The Recorder picks the outermost frame
         // in this package as the driving test. Defaults to picocli for the validation.
         System.setProperty("gtcov.pkg", cfg.getOrDefault("pkg", "picocli."));
+        System.setProperty("gtcov.vcap", cfg.getOrDefault("vcap", "6"));
+        System.setProperty("gtcov.vexc", cfg.getOrDefault("vexc", "2"));
 
         // Make gtcov.Recorder visible to ALL classloaders (the inlined advice calls it).
         File self = new File(Agent.class.getProtectionDomain().getCodeSource().getLocation().toURI());

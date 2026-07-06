@@ -8,15 +8,17 @@ import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
-/** Records a small, diverse sample of runtime (args -> result) per captured method.
- *  Dump line: "<methodFqn>\t<arg0> | <arg1> | ...\t=> <result>"  (result = value or
- *  "throws Type: msg"). Bootstrap-resident; the inlined ValueAdvice calls record(). */
+/** Records a small, diverse sample of runtime (args -> result) per captured method,
+ *  attributed to the driving test (same outermost-project-frame rule as Recorder).
+ *  Dump line: "<methodFqn>\t<testFqn|->\t<arg0> | <arg1> | ...\t=> <result>"  (result =
+ *  value or "throws Type: msg"). Bootstrap-resident; the inlined ValueAdvice calls record(). */
 public final class ValueRecorder {
 
-    private static final int CAP = 6;       // distinct non-throwing lines kept per method
-    private static final int EXC_CAP = 2;   // reserved slots for throwing examples
+    private static final int CAP = Integer.getInteger("gtcov.vcap", 6);       // distinct non-throwing lines per (method, test)
+    private static final int EXC_CAP = Integer.getInteger("gtcov.vexc", 2);   // reserved throwing slots per (method, test)
     private static final int MAXLEN = 100;  // per-value truncation
     private static final String THROW_MARK = "\t=> throws ";
+    private static final String PKG = System.getProperty("gtcov.pkg", "picocli.");
     private static final Map<String, Set<String>> SAMPLES = new ConcurrentHashMap<>();
 
     static {
@@ -26,7 +28,8 @@ public final class ValueRecorder {
     private ValueRecorder() {}
 
     public static void record(String methodFqn, Object[] args, Object ret, Throwable thrown) {
-        Set<String> set = SAMPLES.computeIfAbsent(methodFqn, k -> ConcurrentHashMap.newKeySet());
+        String key = methodFqn + "\t" + drivingTest();
+        Set<String> set = SAMPLES.computeIfAbsent(key, k -> ConcurrentHashMap.newKeySet());
         // Cap non-throwing and throwing examples independently so the exception contract
         // (e.g. invalid-row → IllegalArgumentException) is never crowded out by returns.
         long throwsSoFar = 0;
@@ -48,7 +51,19 @@ public final class ValueRecorder {
                 ? "throws " + thrown.getClass().getSimpleName()
                   + (thrown.getMessage() != null ? ": " + clip(thrown.getMessage()) : "")
                 : repr(ret);
-        set.add(methodFqn + "\t" + a + "\t=> " + result);
+        set.add(key + "\t" + a + "\t=> " + result);
+    }
+
+    /** Same attribution rule as Recorder.record: the OUTERMOST project-package frame
+     *  is the driving @Test method. "-" when no project frame is on the stack. */
+    private static String drivingTest() {
+        StackTraceElement[] st = Thread.currentThread().getStackTrace();
+        for (int i = st.length - 1; i >= 0; i--) {
+            if (st[i].getClassName().startsWith(PKG)) {
+                return st[i].getClassName() + "." + st[i].getMethodName();
+            }
+        }
+        return "-";
     }
 
     private static String repr(Object o) {

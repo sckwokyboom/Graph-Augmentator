@@ -2,6 +2,8 @@
 //   GTCOV_OUT      output dir (matrix*.tsv + executed_tests.txt land here)
 //   GTCOV_AGENT    absolute path to gtcov-agent.jar
 //   GTCOV_INCLUDES ';'-separated type-name prefixes to instrument
+//   GTCOV_CAPTURE  optional ';'-separated method FQNs for value capture
+//   GTCOV_VCAP / GTCOV_VEXC  optional per-(method,test) sample caps (default 2/1)
 def out = System.getenv('GTCOV_OUT')
 def agentJar = System.getenv('GTCOV_AGENT')
 def includes = System.getenv('GTCOV_INCLUDES')
@@ -10,7 +12,14 @@ gradle.allprojects { p ->
   p.tasks.withType(Test).configureEach { t ->
     t.maxParallelForks = 1        // one worker JVM → one Recorder → complete matrix
     t.forkEvery = 0               // never restart the worker mid-suite
-    t.jvmArgs(["-javaagent:" + agentJar + "=out=" + out + ",includes=" + includes])
+    def agentArgs = "out=" + out + ",includes=" + includes
+    def capture = System.getenv('GTCOV_CAPTURE')
+    if (capture) {
+      agentArgs += ",capture=" + capture
+      agentArgs += ",vcap=" + (System.getenv('GTCOV_VCAP') ?: '2')
+      agentArgs += ",vexc=" + (System.getenv('GTCOV_VEXC') ?: '1')
+    }
+    t.jvmArgs(["-javaagent:" + agentJar + "=" + agentArgs])
     def executed = java.util.Collections.synchronizedSet(new java.util.LinkedHashSet())
     t.afterTest { desc, result ->
       executed.add((desc.className + "." + desc.name).replaceAll(/[\[(].*/, ""))
