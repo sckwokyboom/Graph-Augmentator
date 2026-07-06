@@ -68,6 +68,16 @@ public final class ValueRecorder {
 
     private static String repr(Object o) {
         if (o == null) return "null";
+        if (o.getClass().isArray()) {
+            int n = java.lang.reflect.Array.getLength(o);
+            StringBuilder b = new StringBuilder(o.getClass().getSimpleName()).append("{");
+            for (int i = 0; i < n && i < 8; i++) {
+                if (i > 0) b.append(", ");
+                b.append(repr(java.lang.reflect.Array.get(o, i)));
+            }
+            if (n > 8) b.append(", …");
+            return clip(b.append("}").toString());
+        }
         String s;
         try {
             s = String.valueOf(o);
