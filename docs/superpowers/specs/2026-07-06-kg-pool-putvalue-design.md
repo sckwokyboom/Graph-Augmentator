@@ -58,7 +58,8 @@ New:
 - The full 412-test list always ships whole.
 - Detailed per-test artifacts (chains, assert snippets, value-capture digests) follow a
   mechanical rule: group covering tests by test class, take the first K=2 exemplars per
-  class in suite order. No relevance ranking on our side.
+  class in lexicographic order (the coverage matrix is a deduped set; suite order is not
+  recoverable). No relevance ranking on our side.
 - Value capture runs once over the full suite; any filtering happens at render time,
   never at collection time.
 
