@@ -10,14 +10,22 @@ AGENT_DIR = GT / "harness/impact/producers/coverage-agent"
 
 
 def suite_run(cfg, out_dir: Path, capture_fqns, gradle_tests=None):
-    """Run the suite (or a --tests subset) with the gtcov agent. Returns out_dir."""
+    """Run the suite (or a --tests subset) with the gtcov agent. Returns out_dir.
+    Raises if the run produced no executed_tests.txt — gradle keeps STALE result
+    XMLs around, so a silently-failed run would poison every downstream digest
+    (measured on picocli: a failed 2-class rung read 406 stale failures)."""
     out_dir.mkdir(parents=True, exist_ok=True)
-    task = ":test" + "".join(f" --tests {t}" for t in (gradle_tests or []))
+    task = [":test"]
+    for t in (gradle_tests or []):
+        task += ["--tests", t]
     env = dict(os.environ,
                PROJECT=str(cfg.project), INCLUDES=cfg.includes,
                GTCOV_CAPTURE=";".join(sorted(capture_fqns)),
                GTCOV_VCAP=str(cfg.vcap), GTCOV_VEXC=str(cfg.vexc))
-    subprocess.run(["bash", str(RUNNER), str(out_dir), task], env=env, cwd=GT, check=False)
+    subprocess.run(["bash", str(RUNNER), str(out_dir)] + task, env=env, cwd=GT, check=False)
+    if not (out_dir / "executed_tests.txt").exists():
+        raise RuntimeError(f"suite run did not execute (no executed_tests.txt in {out_dir}) — "
+                           "gradle likely failed before :test; check the run output")
     return out_dir
 
 

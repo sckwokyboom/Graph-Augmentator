@@ -1,0 +1,19 @@
+{
+  "target_fqn": "picocli.CommandLine$Help$TextTable.putValue",
+  "target_signature": "public Cell putValue(int row, int col, Text value) {",
+  "stub_body": "throw new UnsupportedOperationException(\"TODO: implement TextTable.putValue\");",
+  "project": "~/gt-eval/picocli",
+  "package": "picocli.",
+  "export_json": "~/gt-eval/slice/.cache/75550581bf63e13f79a330776e9eea3b94f4e5a0379e8cca4a0186d0f148c60e/export/export.json",
+  "pool": "~/gt-eval/kg-pool/putValue-v2",
+  "includes": "picocli.CommandLine$Help$TextTable",
+  "source_file": "src/main/java/picocli/CommandLine.java",
+  "bytecode_classes": ["picocli.CommandLine$Help$TextTable", "picocli.CommandLine$Help$TextTable$Cell", "picocli.CommandLine$Help$Ansi$Text", "picocli.CommandLine$Help$Column"],
+  "type_decls": {"__target_class__": "public static class TextTable {", "Text": "public class Text implements Cloneable", "Cell": "public static class Cell {", "Column": "public static class Column {"},
+  "ladder": [
+    {"name": "spec", "tests": ["picocli.HelpTest", "picocli.TextTableTest"]},
+    {"name": "subset", "tests": ["picocli.AbbreviationMatcherTest", "picocli.ArgGroupTest", "picocli.AtFileTest"]},
+    {"name": "full", "tests": []}
+  ],
+  "reference_file": "/tmp/graph-tipper-demo-backups/CommandLine.java.orig"
+}

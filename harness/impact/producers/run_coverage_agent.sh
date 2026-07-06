@@ -9,8 +9,10 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 AGENT_DIR="$HERE/coverage-agent"
 PROJECT="${PROJECT:?set PROJECT (path to the gradle project)}"
 INCLUDES="${INCLUDES:?set INCLUDES (e.g. picocli.CommandLine\$Help\$TextTable)}"
-OUT="${1:?usage: run_coverage_agent.sh <out-dir> [test-task]}"
-TASK="${2:-:test}"
+OUT="${1:?usage: run_coverage_agent.sh <out-dir> [test-task [--tests filter ...]]}"
+shift
+TASK=("$@")
+[ ${#TASK[@]} -eq 0 ] && TASK=(":test")
 OUT="$(mkdir -p "$OUT" && cd "$OUT" && pwd)"   # absolutize
 
 # 1. Build the agent jars if missing.
@@ -21,13 +23,13 @@ fi
 
 # 2. Run the suite with the agent attached. --rerun-tasks forces a real re-run
 #    (gradle caches test results / marks them UP-TO-DATE otherwise).
-echo "[run] running $TASK on $PROJECT with the coverage agent (single-fork)..."
+echo "[run] running ${TASK[*]} on $PROJECT with the coverage agent (single-fork)..."
 rm -f "$OUT"/matrix*.tsv "$OUT/executed_tests.txt"
 ( cd "$PROJECT" && \
   GTCOV_OUT="$OUT" \
   GTCOV_AGENT="$AGENT_DIR/gtcov-agent.jar" \
   GTCOV_INCLUDES="$INCLUDES" \
-  ./gradlew "$TASK" --rerun-tasks \
+  ./gradlew "${TASK[@]}" --rerun-tasks \
       --init-script "$AGENT_DIR/pertest-agent.gradle" \
       --console=plain --continue ) || true
 

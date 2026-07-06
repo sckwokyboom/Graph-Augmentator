@@ -14,6 +14,16 @@ from harness.kgpool import digest, kg_build, runs
 from harness.kgpool.config import load_config
 
 
+def filter_to_executed(rows, executed_tests_file):
+    """Gradle keeps stale result XMLs for classes not re-run with --tests filters
+    (measured on picocli: a 2-class spec rung read 406 stale failures). Keep only
+    rows whose test actually executed in THIS run, per the runner's executed_tests.txt."""
+    if not executed_tests_file.exists():
+        return rows
+    executed = set(executed_tests_file.read_text().split())
+    return [r for r in rows if r[0] in executed]
+
+
 def diff_iterations(prev_summary, cur_summary):
     p, c = set(prev_summary["failed"]), set(cur_summary["failed"])
     pb = set(prev_summary.get("behavior_classes", {}))
@@ -43,6 +53,7 @@ def main():
     out = runs.suite_run(cfg, it / "run", capture, gradle_tests=rung["tests"])
 
     rows = digest.parse_failures(cfg.project / "build/test-results/test")
+    rows = filter_to_executed(rows, out / "executed_tests.txt")
     (it / "failures.tsv").write_text("\n".join("\t".join(r) for r in rows))
     values = parse_values(sorted(glob.glob(str(out / "values*.tsv"))), limit=10**9)
     (it / "values.json").write_text(json.dumps(values, indent=1))
