@@ -60,8 +60,17 @@ def run(cfg, *, jacoco_agent=None, jacoco_cli=None, skip_jacoco=False):
         snippets.write_snippets(cfg)
         snippets.write_target_class(cfg)
         red = runs.suite_run(cfg, cfg.pool_raw / "red", capture)
+        # JaCoCo is best-effort: the bundle never reads its output (04-runtime/jacoco-region.md),
+        # so a missing jacocoagent/CLI jar must not fail the whole pool.
         if not skip_jacoco:
-            jacoco_xml = runs.jacoco_run(cfg, cfg.pool_raw / "jacoco", jacoco_agent, jacoco_cli)
+            if jacoco_agent.exists() and jacoco_cli.exists():
+                try:
+                    jacoco_xml = runs.jacoco_run(cfg, cfg.pool_raw / "jacoco", jacoco_agent, jacoco_cli)
+                except Exception as exc:
+                    print(f"[collect] jacoco run failed ({exc}); skipping — the bundle does not use it")
+            else:
+                print(f"[collect] jacoco jars not found ({jacoco_agent}, {jacoco_cli}); "
+                      "skipping jacoco — the bundle does not use it")
     finally:
         stubber.revert(cfg.project, cfg.source_file)
 
