@@ -1,8 +1,11 @@
 """Derive a complete kgpool.json from source + the target FQN (no CPG needed).
 Resolves the chicken/egg where the stubbed export requires the signature first: we read
-signature/types straight from source. Type resolution is a heuristic source scan
-(collisions/generics not fully handled); CPG-assisted resolution is a future enhancement
-(see docs/superpowers/specs/2026-07-07-kgpool-any-project-augment-design.md).
+signature/types straight from source. All structural scanning is skip-aware — it ignores
+braces/parens/keywords inside string/char literals and comments, so it holds up on real
+19k-line files (picocli's CommandLine.java has `{@link ...}` javadoc and `"{"` literals
+everywhere). Type resolution is still a heuristic source scan (nested-type binary names
+and generics not fully resolved); CPG-assisted resolution is a future enhancement (see
+docs/superpowers/specs/2026-07-07-kgpool-any-project-augment-design.md).
 
 synth_config() returns a dict that carries an extra `slice_target` (for the export stage)
 and NO `export_json`; make.py removes slice_target and fills export_json before the single
@@ -11,7 +14,13 @@ import re
 from pathlib import Path
 
 PRIMITIVES = {"int", "long", "short", "byte", "char", "boolean", "float", "double", "void"}
-_TYPE_DECL = r"\b(?:class|interface|enum|record)\s+{name}\b"
+# tokens that, when they precede a `name(`, mark it as a call/expression, not a decl
+_KW_BEFORE = {"return", "new", "throw", "throws", "else", "instanceof", "assert",
+              "yield", "case", "do", "while", "if", "for", "switch", "synchronized"}
+
+
+def _is_ident(c: str) -> bool:
+    return c.isalnum() or c in "_$"
 
 
 def _java_files(project: Path):
@@ -19,25 +28,97 @@ def _java_files(project: Path):
             if "/build/" not in str(p).replace("\\", "/")]
 
 
+def _skip_quote(src: str, i: int, q: str) -> int:
+    n = len(src)
+    i += 1
+    while i < n:
+        if src[i] == "\\":
+            i += 2
+            continue
+        if src[i] == q:
+            return i + 1
+        i += 1
+    return n
+
+
+def _skip_noncode(src: str, i: int) -> int:
+    """If src[i] starts a string/char literal or comment, return the index just past it;
+    else return i unchanged. Handles "...", '...', triple-quoted text blocks, // and /*."""
+    n = len(src)
+    c = src[i]
+    if c == '"':
+        if src[i:i + 3] == '"""':
+            j = src.find('"""', i + 3)
+            return n if j < 0 else j + 3
+        return _skip_quote(src, i, '"')
+    if c == "'":
+        return _skip_quote(src, i, "'")
+    if c == "/" and i + 1 < n:
+        if src[i + 1] == "/":
+            j = src.find("\n", i)
+            return n if j < 0 else j + 1
+        if src[i + 1] == "*":
+            j = src.find("*/", i + 2)
+            return n if j < 0 else j + 2
+    return i
+
+
+def _find_struct(src: str, start: int, ch: str) -> int:
+    """Index of the first structural (not in a string/char/comment) `ch` at/after start."""
+    i, n = start, len(src)
+    while i < n:
+        s = _skip_noncode(src, i)
+        if s != i:
+            i = s
+            continue
+        if src[i] == ch:
+            return i
+        i += 1
+    return -1
+
+
+def _find_class_kw(block: str, simple: str) -> int:
+    """Index of a `class|interface|enum|record <simple>` declaration at a code position
+    (skips matches inside strings/comments), or -1."""
+    pat = re.compile(rf"(?:class|interface|enum|record)\s+{re.escape(simple)}\b")
+    n, i = len(block), 0
+    while i < n:
+        s = _skip_noncode(block, i)
+        if s != i:
+            i = s
+            continue
+        if (i == 0 or not _is_ident(block[i - 1])) and pat.match(block, i):
+            return i
+        i += 1
+    return -1
+
+
 def _brace_block(src: str, kw_idx: int):
-    """(block_text, open_idx, close_idx) for the {...} opened at/after kw_idx."""
-    o = src.index("{", kw_idx)
-    depth = 0
-    for j in range(o, len(src)):
-        if src[j] == "{":
+    """(block_text, open_idx, close_idx) for the {...} opened at/after kw_idx, ignoring
+    braces inside strings/char-literals/comments."""
+    o = _find_struct(src, kw_idx, "{")
+    if o < 0:
+        raise ValueError("no opening brace")
+    depth, i, n = 0, o, len(src)
+    while i < n:
+        s = _skip_noncode(src, i)
+        if s != i:
+            i = s
+            continue
+        if src[i] == "{":
             depth += 1
-        elif src[j] == "}":
+        elif src[i] == "}":
             depth -= 1
             if depth == 0:
-                return src[kw_idx:j + 1], o, j
+                return src[kw_idx:i + 1], o, i
+        i += 1
     raise ValueError("unbalanced braces")
 
 
 def _decl_header(text: str, kw_idx: int) -> str:
-    """The type/method decl header from its line start through the opening '{' (inclusive),
-    whitespace-normalised to a single line."""
+    """The decl header from its line start through the opening '{' (inclusive), normalised."""
     line_start = text.rfind("\n", 0, kw_idx) + 1
-    brace = text.index("{", kw_idx)
+    brace = _find_struct(text, kw_idx, "{")
     return " ".join(text[line_start:brace + 1].split())
 
 
@@ -87,44 +168,80 @@ def _descend(src: str, chain):
     """Return (innermost_class_block, innermost_header). chain = simple names outer->inner."""
     block, header = src, None
     for simple in chain:
-        m = re.search(_TYPE_DECL.format(name=re.escape(simple)), block)
-        if not m:
+        idx = _find_class_kw(block, simple)
+        if idx < 0:
             raise ValueError(f"class {simple!r} not found while descending {chain}")
-        header = _decl_header(block, m.start())
-        block, _o, _c = _brace_block(block, m.start())
+        header = _decl_header(block, idx)
+        block, _o, _c = _brace_block(block, idx)
     return block, header
 
 
+def _looks_like_decl(block: str, name_idx: int) -> bool:
+    """True if the method name at name_idx is a declaration (a return type precedes it),
+    not a call/expression (preceded by '.', '=', '(', an operator, or a control keyword)."""
+    j = name_idx - 1
+    while j >= 0 and block[j] in " \t\r\n":
+        j -= 1
+    if j < 0:
+        return False
+    pc = block[j]
+    if pc in ">]":                       # generic/array return type: `List<X> m(` / `int[] m(`
+        return True
+    if not _is_ident(pc):                # '.', '=', '(', '!', '&', etc. -> a call
+        return False
+    end = j + 1
+    while j >= 0 and _is_ident(block[j]):
+        j -= 1
+    return block[j + 1:end] not in _KW_BEFORE
+
+
 def _find_signature(class_block: str, method: str) -> str:
-    for m in re.finditer(rf"\b{re.escape(method)}\s*\(", class_block):
-        after = class_block[m.end():]
-        depth, k = 1, 0
-        while k < len(after) and depth:
-            if after[k] == "(":
-                depth += 1
-            elif after[k] == ")":
-                depth -= 1
-            k += 1
-        rest = after[k:]
-        semi, brace = rest.find(";"), rest.find("{")
-        if brace < 0 or (0 <= semi < brace):
-            continue  # not a body decl (abstract / call)
-        line_start = class_block.rfind("\n", 0, m.start()) + 1
-        end = m.end() + k + brace  # index of the body '{'
-        return " ".join(class_block[line_start:end + 1].split())
+    """The method's source decl (through the opening body '{', normalised), found with a
+    skip-aware scan so `method(` inside javadoc/strings and same-class calls are ignored."""
+    n, i = len(class_block), 0
+    while i < n:
+        s = _skip_noncode(class_block, i)
+        if s != i:
+            i = s
+            continue
+        if (class_block.startswith(method, i)
+                and (i == 0 or not _is_ident(class_block[i - 1]))):
+            j = i + len(method)
+            while j < n and class_block[j] in " \t\r\n":
+                j += 1
+            if j < n and class_block[j] == "(" and _looks_like_decl(class_block, i):
+                depth, k = 0, j                       # skip-aware paren match
+                while k < n:
+                    sk = _skip_noncode(class_block, k)
+                    if sk != k:
+                        k = sk
+                        continue
+                    if class_block[k] == "(":
+                        depth += 1
+                    elif class_block[k] == ")":
+                        depth -= 1
+                        if depth == 0:
+                            k += 1
+                            break
+                    k += 1
+                brace = _find_struct(class_block, k, "{")
+                semi = _find_struct(class_block, k, ";")
+                if brace >= 0 and not (0 <= semi < brace):
+                    ls = class_block.rfind("\n", 0, i) + 1
+                    return " ".join(class_block[ls:brace + 1].split())
+        i += 1
     raise ValueError(f"method decl {method!r} with a body not found in the target class")
 
 
 def _find_type_decl(project: Path, simple: str):
-    pat = re.compile(_TYPE_DECL.format(name=re.escape(simple)))
     for p in _java_files(project):
         text = p.read_text(encoding="utf-8", errors="ignore")
-        m = pat.search(text)
-        if not m:
+        idx = _find_class_kw(text, simple)
+        if idx < 0:
             continue
         pm = re.search(r"^\s*package\s+([\w.]+)\s*;", text, re.M)
         pkg = (pm.group(1) + ".") if pm else ""
-        return pkg + simple, _decl_header(text, m.start())
+        return pkg + simple, _decl_header(text, idx)
     return None
 
 
