@@ -22,7 +22,11 @@ def _javadoc_summary(doc_lines):
             parts.append(t)
     text = re.sub(r"\{@\w+\s*", "", " ".join(parts)).replace("}", "").strip()
     dot = text.find(". ")
-    return (text[:dot + 1] if 0 < dot <= 220 else text[:220]).strip()
+    if 0 < dot <= 220:
+        return text[:dot + 1].strip()
+    if len(text) <= 220:
+        return text
+    return text[:220].rsplit(" ", 1)[0].strip() + " …"    # cut on a word boundary, not mid-word
 
 
 def _brace_extract(src, decl):

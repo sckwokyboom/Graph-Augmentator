@@ -75,14 +75,29 @@ def focus_tests(idx, target_fqn, covering, k_namematch=10):
     return {"direct": direct, "named": named[:k_namematch]}
 
 
-def method_source(idx, fqn, project, *, max_lines=45, strip_doc=False):
-    """Extract a method's source body from disk via its CPG file+line range.
-    strip_doc drops a leading javadoc/line-comment block (for consumer/chain code where the
-    logic, not the doc, is what matters)."""
+def _pick_vertex(idx, fqn, calls=None):
+    """Disambiguate overloads: when `calls` is given, return the overload of `fqn` whose
+    body actually CALLs `calls` (e.g. the addRowValues(Text...) that calls putValue, not the
+    addRowValues(String...) that only delegates); else the first vertex."""
     ms = idx.methods_named(fqn)
     if not ms:
         return None
-    p = ms[0]["properties"]
+    if calls:
+        for mv in ms:
+            for c in idx.children.get(mv.get("id"), []):
+                if c.get("properties", {}).get("METHOD_FULL_NAME", "").split(":")[0] == calls:
+                    return mv
+    return ms[0]
+
+
+def method_source(idx, fqn, project, *, max_lines=45, strip_doc=False, calls=None):
+    """Extract a method's source body from disk via its CPG file+line range.
+    calls disambiguates overloads (the one that calls `calls`); strip_doc drops a leading
+    javadoc/line-comment block (for code where the logic, not the doc, matters)."""
+    mv = _pick_vertex(idx, fqn, calls)
+    if mv is None:
+        return None
+    p = mv["properties"]
     rel = idx.map_filename(p.get("FILENAME") or "")
     start, end = p.get("LINE_NUMBER"), p.get("LINE_NUMBER_END")
     if not rel or rel == "<empty>" or not str(start).lstrip("-").isdigit():
@@ -134,7 +149,9 @@ def write_semantics(cfg, idx, coverage, covering):
     # consumer / chokepoint (production caller with the highest co-coverage)
     cp = chokepoint(idx, target, coverage)
     if cp:
-        src = method_source(idx, cp["fqn"], cfg.project, max_lines=50)
+        # show the OVERLOAD that actually calls the target (the one reading its return),
+        # not an arbitrary same-named overload that merely delegates.
+        src = method_source(idx, cp["fqn"], cfg.project, max_lines=50, calls=target)
         cl = [f"# Consumer / chokepoint: `{cp['fqn']}`", "",
               f"Production caller of the target with the highest test-set overlap "
               f"(jaccard={cp['jaccard']}, {cp['shared']} shared tests) — the single method the "

@@ -22,8 +22,8 @@ class KgPoolConfig:
     type_decls: dict            # snippet name -> class decl search string
     ladder: list                # [{"name": ..., "tests": [gradle --tests filters]}]
     reference_file: Optional[Path] = None   # eval-side only (leak_sweep)
-    vcap: int = 2
-    vexc: int = 1
+    vcap: int = 6                            # per-(method,test) return samples — was 2, too thin
+    vexc: int = 4                            # per-(method,test) exception samples (target/consumer throw)
 
     @property
     def pool_raw(self):

@@ -63,3 +63,40 @@ def test_method_source_maps_test_dir(tmp_path):
     src = semantics.method_source(idx, "pkg.T.x", tmp_path)
     assert src["file"] == "src/test/pkg/T.java"      # /__t__/ -> /test/
     assert "assertEquals" in src["source"] and src["line"] == 1
+
+
+class OverloadIdx:
+    """Two same-named overloads of `pkg.C.addRowValues`; only `v_txt` calls the target."""
+    children = {
+        "v_str": [],
+        "v_txt": [{"properties": {"METHOD_FULL_NAME": "pkg.C.target:void()"}}],
+    }
+
+    def methods_named(self, fqn):
+        if fqn != "pkg.C.addRowValues":
+            return []
+        return [{"id": "v_str", "properties": {"FILENAME": "src/main/java/pkg/C.java", "LINE_NUMBER": 3, "LINE_NUMBER_END": 3}},
+                {"id": "v_txt", "properties": {"FILENAME": "src/main/java/pkg/C.java", "LINE_NUMBER": 6, "LINE_NUMBER_END": 6}}]
+
+    def is_test_code(self, mv):
+        return False
+
+    @staticmethod
+    def map_filename(rel):
+        return rel
+
+
+def test_pick_vertex_disambiguates_overload():
+    idx = OverloadIdx()
+    assert semantics._pick_vertex(idx, "pkg.C.addRowValues", calls="pkg.C.target")["id"] == "v_txt"
+    assert semantics._pick_vertex(idx, "pkg.C.addRowValues")["id"] == "v_str"   # no calls -> first
+
+
+def test_method_source_picks_calling_overload(tmp_path):
+    idx = OverloadIdx()
+    (tmp_path / "src/main/java/pkg").mkdir(parents=True)
+    (tmp_path / "src/main/java/pkg/C.java").write_text(
+        "package pkg;\n// C\nvoid addRowValues(String x){ delegate(); }\n\n"
+        "// C\nvoid addRowValues(Text x){ target(); }\n")
+    src = semantics.method_source(idx, "pkg.C.addRowValues", tmp_path, calls="pkg.C.target")
+    assert "target()" in src["source"] and "delegate()" not in src["source"]
