@@ -5,6 +5,26 @@ import json
 import re
 
 
+def _javadoc_summary(doc_lines):
+    """First-sentence javadoc summary from the lines above a method decl: strip comment
+    delimiters and {@link}/{@code} markup, stop at the first @tag, cut at the first
+    sentence (<=220 chars). Replaces the old heuristic that emitted `> /` and mid-sentence
+    fragments."""
+    parts = []
+    for line in doc_lines:
+        t = line.strip()
+        if t.endswith("*/"):
+            t = t[:-2]
+        t = t.lstrip("/*").strip().lstrip("*").strip()
+        if t.startswith("@"):
+            break
+        if t:
+            parts.append(t)
+    text = re.sub(r"\{@\w+\s*", "", " ".join(parts)).replace("}", "").strip()
+    dot = text.find(". ")
+    return (text[:dot + 1] if 0 < dot <= 220 else text[:220]).strip()
+
+
 def _brace_extract(src, decl):
     i = src.find(decl)
     if i < 0:
@@ -52,10 +72,12 @@ def write_snippets(cfg):
         (pool / f"02-static/snippets/{safe}.java").write_text(body + "\n")
         written += 1
         sig_line = ls[s].strip()
-        doc = [l.strip(" *") for l in ls[j:s] if l.strip().startswith("*") and "@" not in l][:3]
+        summary = _javadoc_summary(ls[j:s])
         contracts += [f"## {m['fqn']}",
                       f"`{sig_line}`  ({m['file']}:{m['line_start']}-{m['line_end']})"]
-        contracts += [f"> {d}" for d in doc if d] + [""]
+        if summary:
+            contracts.append(f"> {summary}")
+        contracts.append("")
 
     src = (proj / cfg.source_file).read_text()
     for name, decl in cfg.type_decls.items():

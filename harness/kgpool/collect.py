@@ -10,8 +10,10 @@ import json
 import subprocess
 from pathlib import Path
 
+from harness.impact.cpg_index import load_index
 from harness.impact.dynamic_parse import parse_values
-from harness.kgpool import bytecode, corridor, digest, kg_build, leak_sweep, manifest, runs, snippets, stubber
+from harness.kgpool import (bytecode, corridor, digest, kg_build, leak_sweep, manifest, runs,
+                            semantics, snippets, stubber)
 from harness.kgpool.config import load_config
 
 
@@ -48,7 +50,8 @@ def run(cfg, *, jacoco_agent=None, jacoco_cli=None, skip_jacoco=False):
               "04-runtime/value-capture", "05-failure/red-run", "_tools", "_raw"):
         (cfg.pool / d).mkdir(parents=True, exist_ok=True)
 
-    corridor_methods = corridor.build_corridor(cfg)
+    idx = load_index(cfg.export_json)
+    corridor_methods = corridor.build_corridor(cfg, idx)
     capture = sorted({m["fqn"] for m in corridor_methods})
 
     src = cfg.project / cfg.source_file
@@ -95,6 +98,7 @@ def run(cfg, *, jacoco_agent=None, jacoco_cli=None, skip_jacoco=False):
     cfg.provenance("04-runtime/value-capture/red.json", "kgpool.collect",
                    f"red capture: {sum(len(v) for v in values.values())} examples, {len(values)} methods")
     coverage = json.loads((red / "coverage.json").read_text())
+    semantics.write_semantics(cfg, idx, coverage, covering)
     kg = kg_build.build_kg(cfg.target_fqn, values, coverage, rows, covering, set(exemplars))
     (cfg.pool / "knowledge-graph.json").write_text(json.dumps(kg, ensure_ascii=False, indent=1))
     cfg.provenance("knowledge-graph.json", "kgpool.collect",

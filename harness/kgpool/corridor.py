@@ -4,14 +4,26 @@ children + CDG/REACHING_DEF edges among them + CALL edges), corridor-slice.md.
 Also verifies the export was built from the STUBBED target body (leak rule).
 Port of the putValue pool's _tools/corridor.py, config-driven."""
 import json
+import re
 from collections import defaultdict
 
 from harness.impact.cpg_index import load_index
 
 
-def build_corridor(cfg):
+def is_peripheral(file: str, fqn: str) -> bool:
+    """True for example/demo/sample modules and synthesized anonymous-class chains:
+    production code that lands in the ±2-hop corridor but is never relevant to implementing
+    the target (e.g. picocli-examples/... or a joern-mangled anon FQN like `...Help$0.layout`)."""
+    f = (file or "").replace("\\", "/")
+    if any(seg in f for seg in ("-examples/", "/examples/", "/samples/", "/demo/")):
+        return True
+    return bool(re.search(r"\$\d", fqn))
+
+
+def build_corridor(cfg, idx=None):
     target, export, pool = cfg.target_fqn, cfg.export_json, cfg.pool
-    idx = load_index(export)
+    if idx is None:
+        idx = load_index(export)
     fwd = idx.call_map                                   # fqn -> callees
     rev = defaultdict(set)
     for src, tgts in fwd.items():
@@ -29,8 +41,12 @@ def build_corridor(cfg):
             seen |= frontier
         return seen
 
+    def _file(fqn):
+        ms = idx.methods_named(fqn)
+        return ms[0]["properties"].get("FILENAME") if ms else None
+
     corridor = sorted(f for f in (hops(target, fwd, 2) | hops(target, rev, 2))
-                      if prod(f) and idx.methods_named(f))
+                      if prod(f) and idx.methods_named(f) and not is_peripheral(_file(f), f))
 
     # stub verification: target statements must contain the stub marker
     stub_marker = cfg.stub_body.split("(")[0]            # e.g. "throw new UnsupportedOperationException"
