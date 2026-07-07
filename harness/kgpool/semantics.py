@@ -173,9 +173,13 @@ def write_semantics(cfg, idx, coverage, covering):
     budgets = sorted((cfg.pool / "_export").glob("*.budget.md"))
     sidecar = budgets[0].with_name(budgets[0].name.replace(".budget.md", ".json")) if budgets else None
     if sidecar and sidecar.exists():
-        md = medoids.render_medoids(budgets[0].read_text(encoding="utf-8"),
-                                    json.loads(sidecar.read_text(encoding="utf-8")), target)
-        (cfg.pool / "02-static/medoids.md").write_text(md)
+        budget_md = budgets[0].read_text(encoding="utf-8")
+        side = json.loads(sidecar.read_text(encoding="utf-8"))
+        (cfg.pool / "02-static/medoids.md").write_text(medoids.render_medoids(budget_md, side, target))
         cfg.provenance("02-static/medoids.md", "kgpool.medoids.render_medoids",
-                       "clustered call chains (paths only) from the slice budget")
+                       "clustered call chains (paths only, example/virtual hops dropped)")
+        (cfg.pool / "02-static/chain-snippets.md").write_text(
+            medoids.render_chain_snippets(budget_md, side, target))
+        cfg.provenance("02-static/chain-snippets.md", "kgpool.medoids.render_chain_snippets",
+                       "call-site snippets in chain order (real edges only)")
     return cp

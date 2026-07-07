@@ -74,6 +74,17 @@ def test_no_duplicate_contracts_heading(tmp_path):
     assert text.count("Method contracts (corridor)") == 1
 
 
+def test_prefers_chain_snippets_over_corridor(tmp_path):
+    p = _pool(tmp_path)
+    (p / "02-static/snippets/zz_corridor_only.java").write_text("void z() { CORRIDOR_ONLY_TOKEN(); }\n")
+    (p / "02-static/chain-snippets.md").write_text(
+        "# Chain snippets (call sites along the representative chains)\n\n"
+        "- `A.foo → B.bar`:\n```java\nvoid foo() { bar(); }\n```\n")
+    text = render(_cfg(p)).read_text()
+    assert "A.foo → B.bar" in text                     # chain-driven snippets used when present
+    assert "CORRIDOR_ONLY_TOKEN" not in text           # corridor _snippets NOT invoked then
+
+
 def test_render_deterministic(tmp_path):
     a = render(_cfg(_pool(tmp_path / "a"))).read_text()
     b = render(_cfg(_pool(tmp_path / "b"))).read_text()

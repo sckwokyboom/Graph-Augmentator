@@ -127,10 +127,15 @@ def render(cfg, *, caps=None):
     tgt_vals, tv_drop = _values(pool, cfg.target_fqn, caps["values"])
     cp_fqn = _chokepoint_fqn(pool)
     cp_vals, cv_drop = _values(pool, cp_fqn, caps["values"]) if cp_fqn else ("_(no chokepoint)_", 0)
-    snippets, s_drop = _snippets(pool, caps["snippets"], caps["snippet_lines"])
+    # chain-driven call-site snippets (in real-chain order) preferred; corridor snippets are
+    # the fallback when a reused export skipped the slice (no chain sidecar).
+    if (pool / "02-static/chain-snippets.md").exists():
+        snippets, s_drop = _embed(pool, "02-static/chain-snippets.md"), 0
+    else:
+        snippets, s_drop = _snippets(pool, caps["snippets"], caps["snippet_lines"])
     capped = []
     for n, what in ((tv_drop, "target value row(s)"), (cv_drop, "consumer value row(s)"),
-                    (s_drop, "chain snippet(s)")):
+                    (s_drop, "corridor snippet(s)")):
         if n:
             capped.append(f"{n} {what}")
     caps_note = ("<!-- capped: " + "; ".join(capped) + " -->") if capped else "<!-- capped: nothing -->"
