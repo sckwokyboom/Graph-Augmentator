@@ -112,8 +112,8 @@ def collect_chain_edges(budget_md, sidecar, target_fqn):
             if pos == 0:                                   # [0] is test -> entry
                 continue
             caller, callee = step.get("callerFqn", ""), step.get("calleeFqn", "")
-            if not caller or not callee or caller == target_fqn:
-                continue
+            if not caller or not callee or caller == target_fqn or caller == callee:
+                continue                                   # drop target-as-caller + self-recursion
             if _is_virtual(step) or _peripheral(caller) or _peripheral(callee):
                 continue
             dist = len(steps) - 1 - pos                    # 0 = the edge INTO the target
@@ -124,7 +124,7 @@ def collect_chain_edges(budget_md, sidecar, target_fqn):
                                            key=lambda ds: (ds[0], ds[1].get("callerFqn", "")))]
 
 
-def render_chain_snippets(budget_md, sidecar, target_fqn, *, cap=12, max_lines=10):
+def render_chain_snippets(budget_md, sidecar, target_fqn, *, cap=16, max_lines=10):
     """Call-site snippets in chain order: each real caller->callee edge on the way to the
     target, once, with the caller's code windowed around the call. Uses the sidecar's
     per-step `snippet` (no source re-extraction)."""
@@ -135,7 +135,7 @@ def render_chain_snippets(budget_md, sidecar, target_fqn, *, cap=12, max_lines=1
     lines = [head, "",
              "Each real caller→callee edge on the way to the target, once, **closest to `"
              + _simple(target_fqn) + "` first** — put `//[probe]` at these call sites to watch "
-             "what flows in. (Virtual/interface and example edges are dropped.)", ""]
+             "what flows in. (Virtual/interface, example and self-recursion edges are dropped.)", ""]
     for step in steps[:cap]:
         edge = f"{_simple(step['callerFqn'])} → {_simple(step['calleeFqn'])}"
         snippet = (step.get("snippet") or "").strip()
@@ -144,4 +144,7 @@ def render_chain_snippets(budget_md, sidecar, target_fqn, *, cap=12, max_lines=1
         else:
             lines += [f"- `{edge}`:", "```java",
                       _compact_call(snippet, step["calleeFqn"].rpartition(".")[2], max_lines), "```", ""]
+    if len(steps) > cap:                                   # no silent truncation
+        lines.append(f"_({len(steps) - cap} further, farther-from-target edges omitted — entry "
+                     "plumbing already covered by the Clustered-call-chains paths above.)_")
     return "\n".join(lines)

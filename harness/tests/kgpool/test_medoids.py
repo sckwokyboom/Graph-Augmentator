@@ -54,6 +54,21 @@ def test_render_chain_snippets_in_order_with_callsites():
             < out.index("CommandLine.parseArgs → TextTable.addRowValues"))
 
 
+def test_self_recursion_filtered_and_cap_note():
+    steps = [{"callerFqn": "p.T.x", "calleeFqn": "p.C.entry"},               # test->entry (skipped)
+             {"callerFqn": "p.C.r", "calleeFqn": "p.C.r", "snippet": "s"},   # self-recursion (dropped)
+             {"callerFqn": "p.C.a", "calleeFqn": "p.C.b", "snippet": "void a(){ b(); }"},
+             {"callerFqn": "p.C.c", "calleeFqn": "p.C.d", "snippet": "void c(){ d(); }"},
+             {"callerFqn": "p.C.e", "calleeFqn": "p.C.f", "snippet": "void e(){ f(); }"}]
+    sidecar = {"chains": [{"test": "p.T.x", "steps": steps}]}
+    budget = "#### x\n**Entry-point:** `p.C.entry`\n**Primary representative:** `p.T.x`\n"
+    edges = collect_chain_edges(budget, sidecar, "p.Z.t")
+    assert ("p.C.r", "p.C.r") not in [(s["callerFqn"], s["calleeFqn"]) for s in edges]  # self dropped
+    assert len(edges) == 3
+    out = render_chain_snippets(budget, sidecar, "p.Z.t", cap=2)
+    assert "1 further" in out and "omitted" in out                                       # no silent cap
+
+
 def test_empty_budget():
     assert "_(no medoid clusters" in render_medoids("# nope", {"chains": []}, "p.C.m")
     assert "_(no non-virtual" in render_chain_snippets("# nope", {"chains": []}, "p.C.m")
