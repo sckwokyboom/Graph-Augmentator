@@ -2,7 +2,9 @@
 import json
 
 
-SKIP = ("_tools", "_raw", "_baseline", "_examples", "_iterations", "_reference", "00-MANIFEST")
+SKIP = ("_tools", "_raw", "_baseline", "_examples", "_iterations", "_reference",
+        "_export", "00-MANIFEST", "kgpool.json", "kgpool.synth.json",
+        "kgpool.provenance.json", "augment.prompt.md")
 
 
 def write_manifest(cfg):
