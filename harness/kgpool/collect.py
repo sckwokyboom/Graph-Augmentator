@@ -40,15 +40,10 @@ def _render_jacoco(cfg, jacoco_xml, corridor_methods):
                    "red-run per-line coverage; stub-only body — nothing to redact")
 
 
-def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--config", required=True)
-    ap.add_argument("--jacoco-agent", default=str(Path.home() / "gt-eval/jacoco/jacocoagent.jar"))
-    ap.add_argument("--jacoco-cli",
-                    default=str(Path.home() / ".gradle/caches/jacoco-cli/org.jacoco.cli-0.8.12-nodeps.jar"))
-    ap.add_argument("--skip-jacoco", action="store_true", help="skip the second suite run")
-    args = ap.parse_args()
-    cfg = load_config(args.config)
+def run(cfg, *, jacoco_agent=None, jacoco_cli=None, skip_jacoco=False):
+    jacoco_agent = Path(jacoco_agent) if jacoco_agent else Path.home() / "gt-eval/jacoco/jacocoagent.jar"
+    jacoco_cli = Path(jacoco_cli) if jacoco_cli else (
+        Path.home() / ".gradle/caches/jacoco-cli/org.jacoco.cli-0.8.12-nodeps.jar")
     for d in ("01-task", "02-static/snippets", "02-static/bytecode", "03-tests",
               "04-runtime/value-capture", "05-failure/red-run", "_tools", "_raw"):
         (cfg.pool / d).mkdir(parents=True, exist_ok=True)
@@ -65,9 +60,8 @@ def main():
         snippets.write_snippets(cfg)
         snippets.write_target_class(cfg)
         red = runs.suite_run(cfg, cfg.pool_raw / "red", capture)
-        if not args.skip_jacoco:
-            jacoco_xml = runs.jacoco_run(cfg, cfg.pool_raw / "jacoco",
-                                         Path(args.jacoco_agent), Path(args.jacoco_cli))
+        if not skip_jacoco:
+            jacoco_xml = runs.jacoco_run(cfg, cfg.pool_raw / "jacoco", jacoco_agent, jacoco_cli)
     finally:
         stubber.revert(cfg.project, cfg.source_file)
 
@@ -103,6 +97,18 @@ def main():
         if leaks:
             raise SystemExit(f"LEAK SWEEP FAILED: {leaks}")
     print(f"pool collected: {cfg.pool}")
+    return cfg.pool
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--config", required=True)
+    ap.add_argument("--jacoco-agent", default=None)
+    ap.add_argument("--jacoco-cli", default=None)
+    ap.add_argument("--skip-jacoco", action="store_true", help="skip the second suite run")
+    args = ap.parse_args()
+    cfg = load_config(args.config)
+    run(cfg, jacoco_agent=args.jacoco_agent, jacoco_cli=args.jacoco_cli, skip_jacoco=args.skip_jacoco)
 
 
 if __name__ == "__main__":
