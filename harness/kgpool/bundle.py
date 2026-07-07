@@ -17,7 +17,8 @@ observe the real data flow -> implement against what you saw**. Use ONLY the fac
 2. Direct tests (the contract) — the oracles that pin behaviour (see the Direct-tests block).
 3. Which tests to instrument — the universe + the focus set below.
 4. Consumer contract — the chokepoint that reads the return value (see Consumer/chokepoint).
-5. Call chains / chain snippets — where to place `//[probe]` diagnostics.
+5. Call chains — the clustered end-to-end scenarios (medoids) + the chain snippets where to
+   place `//[probe]` diagnostics.
 6. Chokepoint — the single method most calls pass through.
 7. Reminders — remove every `//[probe]` before finishing."""
 
@@ -189,6 +190,10 @@ only the ARGUMENTS it was handed (the result is always the stub throw), not its 
 ### Method contracts (corridor)
 
 {_embed(pool, "02-static/method-contracts.md", "_(no contracts)_")}
+
+### Clustered call chains (medoids)
+
+{_embed(pool, "02-static/medoids.md", "_(no medoid clusters — a reused export skipped the slice; run without --reuse-export)_")}
 
 ### Chain snippets (place `//[probe]` here)
 

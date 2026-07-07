@@ -21,6 +21,9 @@ def _pool(tmp_path):
         "# Consumer / chokepoint: `demo.Box$Inner.compute`\n\nProduction caller with the highest "
         "overlap.\n\n```java\nResult compute(int idx, Payload p) { return new Result(idx); }\n```\n")
     (p / "02-static/chokepoint.txt").write_text("demo.Box$Inner.compute\n")
+    (p / "02-static/medoids.md").write_text(
+        "# Clustered call chains (medoids)\n\n## Cluster 1: `Box.parse` path\n"
+        "`T1.x → Box.parse → Inner.put`\n")
     (p / "04-runtime/value-capture/red.json").write_text(json.dumps({
         "demo.Box$Inner.put": [{"args": ["1", "p"], "result": "Result{idx=1}", "throws": False},
                                {"args": ["0", "q"], "result": "boom", "throws": True}],
@@ -49,8 +52,10 @@ def test_render_has_all_sections(tmp_path):
               "### Direct tests (the contract)", "### Universe (tests that reach the target)",
               "### Focus set (instrument these first)", "### Consumer / chokepoint (who reads the return)",
               "### Runtime values (observed with the target stubbed)", "### Method contracts (corridor)",
-              "### Chain snippets", "### Failures & golden outputs", "### Knowledge-graph summary"):
+              "### Clustered call chains (medoids)", "### Chain snippets", "### Failures & golden outputs",
+              "### Knowledge-graph summary"):
         assert h in text, h
+    assert "T1.x → Box.parse → Inner.put" in text        # medoid path surfaced
 
 
 def test_render_content(tmp_path):

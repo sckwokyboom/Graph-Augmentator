@@ -9,8 +9,11 @@ Pure functions over a CpgIndex (harness.impact.cpg_index) + the red coverage mat
 (`{method_fqn: [test_fqn, ...]}`). Reachability of the return value is not tracked at the
 identifier level (only statement-level REACHING_DEF exists), so the consumer is derived from
 the production callers ranked by co-coverage — reliable, matches the hand slice's pick."""
+import json
 from collections import defaultdict
 from pathlib import Path
+
+from harness.kgpool import medoids
 
 
 def reverse_call_map(idx):
@@ -164,4 +167,15 @@ def write_semantics(cfg, idx, coverage, covering):
         (cfg.pool / "02-static/chokepoint.txt").write_text(cp["fqn"] + "\n")
         cfg.provenance("02-static/consumer.md", "kgpool.semantics.write_semantics",
                        f"chokepoint {cp['fqn']} (jaccard {cp['jaccard']}, {len(cp['callers'])} prod callers)")
+
+    # clustered call chains (medoids) — byproduct of the slice export; absent when
+    # --reuse-export skipped the slice run (no budget.md in _export/).
+    budgets = sorted((cfg.pool / "_export").glob("*.budget.md"))
+    sidecar = budgets[0].with_name(budgets[0].name.replace(".budget.md", ".json")) if budgets else None
+    if sidecar and sidecar.exists():
+        md = medoids.render_medoids(budgets[0].read_text(encoding="utf-8"),
+                                    json.loads(sidecar.read_text(encoding="utf-8")), target)
+        (cfg.pool / "02-static/medoids.md").write_text(md)
+        cfg.provenance("02-static/medoids.md", "kgpool.medoids.render_medoids",
+                       "clustered call chains (paths only) from the slice budget")
     return cp
