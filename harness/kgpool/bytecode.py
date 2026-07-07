@@ -24,12 +24,22 @@ def dump_bytecode(cfg, classpath="build/classes/java/main"):
     outdir.mkdir(parents=True, exist_ok=True)
     target_method = cfg.target_fqn.rpartition(".")[2]
     target_cls = cfg.target_fqn.rpartition(".")[0]
+    ok, skipped = 0, []
     for c in cfg.bytecode_classes:
-        raw = subprocess.run(["javap", "-p", "-c", "-l", "-cp", classpath, c],
-                             cwd=cfg.project, capture_output=True, text=True, check=True).stdout
-        if c == target_cls:
-            raw = redact_member(raw, target_method)
-        (outdir / (c.replace("$", "_") + ".txt")).write_text(raw)
-    cfg.provenance("02-static/bytecode/", "kgpool.bytecode.dump_bytecode",
-                   f"{len(cfg.bytecode_classes)} classes; {target_method} member redacted in {target_cls}. "
-                   "NB: compiled from the STUBBED source (strict policy) — build classes with the stub applied.")
+        r = subprocess.run(["javap", "-p", "-c", "-l", "-cp", classpath, c],
+                           cwd=cfg.project, capture_output=True, text=True)
+        out = outdir / (c.replace("$", "_") + ".txt")
+        if r.returncode != 0 or "Error:" in r.stdout or not r.stdout.strip():
+            # javap could not resolve this class (config_synth's source scan does not
+            # resolve nested/external type binary names) — degrade, don't crash.
+            skipped.append(c)
+            out.write_text(f"// [unavailable: javap could not resolve {c}]\n")
+            continue
+        raw = redact_member(r.stdout, target_method) if c == target_cls else r.stdout
+        out.write_text(raw)
+        ok += 1
+    note = (f"{ok} classes dumped; {target_method} member redacted in {target_cls}. "
+            "NB: compiled from the STUBBED source (strict policy).")
+    if skipped:
+        note += f" Skipped (unresolved): {', '.join(skipped)}."
+    cfg.provenance("02-static/bytecode/", "kgpool.bytecode.dump_bytecode", note)
